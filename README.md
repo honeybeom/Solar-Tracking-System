@@ -1,0 +1,91 @@
+# Uno Solar Lab — Arduino 코드 실행형 시뮬레이터
+
+이 프로젝트는 단순한 태양광 추적기 화면이 아닙니다. 브라우저에서 Arduino Uno 스타일 코드를 수정하고 실행하면 그 결과가 가상 핀, 서보, LCD, 태양광 패널에 반영되는 교육용 시뮬레이터입니다.
+
+## 실행
+
+`index.html`을 최신 브라우저로 여세요. 설치, 서버, 인터넷 연결이 필요하지 않습니다.
+
+1. 기본 `.ino` 코드를 읽거나 수정합니다.
+2. **컴파일 · 적용**을 눌러 `setup()`을 실행하고 `loop()` 1회를 적용합니다.
+3. **실행**을 누르면 작성한 `loop()`이 코드의 `delay()` 주기에 맞춰 반복됩니다.
+4. 빛 방향·높이·세기를 변경하고 A0–A3 센서값, D9/D10 서보, LCD 변화가 코드와 일치하는지 확인합니다.
+
+3D 모델 영역에서는 마우스/트랙패드로 드래그하여 시점을 회전하고, 휠로 확대·축소할 수 있습니다. 참고 설계를 반영한 사각 적층 베이스, 원형 회전판, 알루미늄 프로파일 기둥, 패널 프레임 및 링크 브래킷이 포함됩니다. 파란 하우징과 노란 혼으로 표시된 D9 수평 서보와 D10 수직 서보를 모델 안에서 확인할 수 있으며, `Servo.write()`가 변경한 각도를 그대로 반영합니다.
+
+D9은 원형 회전판 위의 기둥·회전 헤드·패널 전체를 수직축으로 돌리고, D10은 회전 헤드에 고정된 서보 혼과 링크를 통해 패널을 수평 힌지축으로 기울입니다. 따라서 두 축을 동시에 구동해도 모델의 피벗 위치가 유지됩니다. 패널의 3D 방향은 별도 애니메이션이 아니라 현재 `D9`/`D10`의 `Servo.write()` 각도에서 직접 계산됩니다.
+
+## 실제 제작 재료 반영
+
+3D 모델은 제작 재료표를 바탕으로 한 단일 추적기 조립체입니다. 9 V / 5 W / 215×180 mm 태양광 모듈, 200×200 mm 아크릴 베이스, 지름 150 mm 아크릴 회전판, 20×20 알루미늄 프로파일 기둥, 중앙 슬립링, MG90S D9·D10 서보 및 링크 브래킷을 표시합니다. 재료표에 있던 NEMA17·스테퍼 드라이버는 실제 추적축에 사용하지 않는 것으로 확인되어 구동 모델에 포함하지 않았습니다.
+
+## 입사각 기반 발전 모델
+
+발전량은 LDR 값의 크기가 아니라 3D 광원 방향 벡터 **L**과 패널 법선 벡터 **N**의 내적으로 계산합니다.
+
+`P = 16 W × (빛 세기 / 100) × max(0, L · N)`
+
+즉 패널 법선이 광원을 정확히 향하는 입사각 `θ = 0°`에서 최대 출력이고, `θ = 90°`에서 출력은 0 W에 가깝습니다. 3D 모델의 청록색 `N` 화살표와 `INCIDENCE θ` 카드는 이 관계를 눈으로 확인하기 위한 표시입니다. 전압, 전류 및 Wh 누적도 이 전력값에서 일관되게 계산됩니다.
+
+## 지원 문법과 API
+
+브라우저에서 C++ 전체를 컴파일하는 것은 아니며, 졸업작품의 제어 로직을 검증할 수 있는 Arduino Uno 교육용 부분집합을 실행합니다.
+
+- `void setup()`, `void loop()`, 변수 선언, 산술, `if / else if / else`
+- `analogRead(A0)` ~ `analogRead(A3)`
+- `Servo` 선언, `attach()`, `write()`, `read()`
+- `LiquidCrystal_I2C` 선언, `init()`, `backlight()`, `clear()`, `setCursor()`, `print()`
+- `#include <Adafruit_INA219.h>`, `Adafruit_INA219 ina219;`, `begin()`, `getBusVoltage_V()`, `getCurrent_mA()`, `getPower_mW()`
+- `Serial.print()`, `Serial.println()`, `delay()`, `constrain()`, `abs()`, `min()`, `max()`, `map()`
+- 시뮬레이터 전용 `readPower()`, `readVoltage()`, `readCurrent()`
+
+`for`, `while`, `switch`, 사용자 클래스·라이브러리 등 복잡한 C++ 문법은 실행하지 않습니다.
+
+## INA219 전력 센서 예제
+
+INA219는 A4/SDA·A5/SCL I²C 버스의 기본 주소 `0x40`으로 시뮬레이션됩니다. 별도 설치 없이 아래처럼 코드 편집기에 쓸 수 있습니다.
+
+```cpp
+#include <Adafruit_INA219.h>
+Adafruit_INA219 ina219;
+
+void setup() { ina219.begin(); }
+void loop() {
+  float voltage = ina219.getBusVoltage_V();
+  float currentA = ina219.getCurrent_mA() / 1000;
+  float powerW = ina219.getPower_mW() / 1000;
+}
+```
+
+이 값들은 가상의 패널 입사각·조도 기반 전력 모델에서 읽히므로 `voltage × currentA`와 `powerW`가 일관되게 맞습니다. `getShuntVoltage_mV()`, `getLoadVoltage_V()`와 대표 보정 메서드도 지원합니다.
+
+## 가상 하드웨어 매핑
+
+| Arduino 구성 | 시뮬레이터 반영 |
+| --- | --- |
+| A0 / A1 / A2 / A3 | 좌상 / 우상 / 좌하 / 우하 LDR 값 |
+| D9 | 수평(azimuth) 서보 각도 |
+| D10 | 수직(elevation) 서보 각도 |
+| A4/SDA, A5/SCL | I²C 버스 |
+| LCD `0x26` / `0x27` | 두 16×2 LCD |
+| INA219(선택) | `readPower`, `readVoltage`, `readCurrent` 모델 |
+
+LDR 값은 무작위가 아니며 빛 방향을 판별하는 용도입니다. 발전량은 LDR 크기에서 직접 계산하지 않습니다. `lightAzimuth/lightElevation`과 D9/D10 각도에서 각각 3D 단위 벡터를 만든 뒤, `max(0, lightDirection · panelNormal)`으로 입사 정렬도를 구합니다. 따라서 패널이 광원을 정면으로 향할수록 발전량이 증가합니다.
+
+## 자동 졸업작품 시퀀스와 LCD
+
+기본 스케치는 보조 자동 실행기가 아닌 Arduino 스타일 코드 자체로 시퀀스를 수행합니다. `unsigned long`, `millis()`, 사용자 정의 함수 및 `delay(100)` 샘플 간격을 사용합니다. 30초 안정화는 `millis()` 비교식으로 처리하므로 대기 중에도 시뮬레이션 시간·Wh·CO₂ 적산이 계속됩니다. 실행 속도 선택은 같은 비율로 `millis()`도 가속합니다.
+
+모든 LCD 출력은 실제 선언된 `LiquidCrystal_I2C` 객체의 `clear()`, `setCursor()`, `print()`를 통해 각 I²C 주소의 독립 버퍼에 기록됩니다. 기본 스케치는 초기화에서만 `clear()`를 호출하며, 실행 중에는 공백 16칸을 출력하여 행을 지우는 실제 LCD 방식으로 갱신합니다.
+
+1. 5초·약 50회 BEFORE 측정 후 LCD1에 `BEFORE TRACK / P:…W`를 고정
+2. D9/D10 MG90S 서보가 A0–A3 LDR 오차로 20–160° 범위에서 단계 이동
+3. 10회 연속 오차 허용범위 만족 후 `TRACK COMPLETE / WAIT 30 SEC`
+4. `millis()` 기반 30초 안정화, 이어서 5초 AFTER 측정
+5. LCD2가 사후 전력/개선율과 누적 Wh·CO₂ 화면을 3초마다 교대
+
+상단의 **최대 패널 출력**은 기본 5 W인 시뮬레이션 파라미터입니다. 전압은 정렬도에 따라 완만하게 변하고 전류는 유효 조도에 따라 변하며, 항상 `readVoltage() × readCurrent() ≈ solarPower`가 되도록 계산합니다. CO₂ 계수의 기본값은 프로젝트 기준 `0.4541 kgCO₂eq/kWh`이며 UI에서 조정할 수 있습니다.
+
+코드 안의 `HORIZONTAL_DIR`, `VERTICAL_DIR`, `SENSOR_POLARITY`는 실제 기구 방향이나 LDR 배선 극성이 반대일 때 `-1`로 바꾸는 보정 상수입니다.
+
+`lcd.print(value, 1)`과 `lcd.print(value, 2)`는 각각 지정한 소수 자릿수로 출력합니다. 한 행의 16칸을 넘는 글자는 해당 행에서 멈추며 다른 행 또는 다른 LCD를 변경하지 않습니다.

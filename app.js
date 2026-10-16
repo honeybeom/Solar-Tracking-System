@@ -5,148 +5,200 @@ const $ = id => document.getElementById(id);
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const A0 = 0, A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5;
 
-const defaultSketch = `#include <Servo.h>
+const defaultSketch = `// 2축 태양광 추적 및 탄소 저감량 모니터링 시스템
+// 아두이노 우노 1개 / MG90S 서보모터 2개
+// CdS 광센서 4개 / LCD 2개 / INA219 전압·전류 센서
+
 #include <Wire.h>
+#include <Servo.h>
 #include <LiquidCrystal_I2C.h>
 #include <Adafruit_INA219.h>
 
-Servo horizontalMotor;
-Servo verticalMotor;
+// LCD1 : 추적 전 발전량, LCD2 : 추적 후 발전량 / 결과
 LiquidCrystal_I2C lcd1(0x26, 16, 2);
 LiquidCrystal_I2C lcd2(0x27, 16, 2);
+
+// 전압·전류 센서 (I2C, 주소 0x40)
 Adafruit_INA219 ina219;
 
-// Calibration constants: use -1 when a real prototype axis or sensor is reversed.
-const int HORIZONTAL_DIR = 1;
-const int VERTICAL_DIR = 1;
-const int SENSOR_POLARITY = 1;
-const int TOLERANCE = 18;
-const int STEP_SIZE = 2;
-const int STABLE_READINGS = 10;
-const unsigned long SAMPLE_MS = 100;
+Servo servoH;   // 수평축 (D9)
+Servo servoV;   // 수직축 (D10)
 
-int horizontalPos = 90;
-int verticalPos = 90;
-int trackerState = 0; // 0 BEFORE, 1 TRACKING, 2 STABILIZING, 3 AFTER, 4 RESULT
-int stableCount = 0;
-int sampleCount = 0;
-float powerTotal = 0;
-float beforePower = 0;
-float afterPower = 0;
-unsigned long stateStarted = 0;
-unsigned long lastSample = 0;
-unsigned long lastResultPage = 0;
-int resultPage = 0;
+const int RANGE = 35;   // 밝기 차이가 이 값 이하면 "정렬됨"
+
+int angleH = 90;
+int angleV = 90;
+
+int errH = 0;   // 좌우 밝기 차이 (+면 왼쪽이 밝음)
+int errV = 0;   // 상하 밝기 차이 (+면 위쪽이 밝음)
+
+// 0:추적 전 측정  1:추적  2:30초 대기  3:추적 후 측정  4:결과 표시
+int step = 0;
+int count = 0;   // loop 한 번 = 0.1초, 몇 번 돌았는지 셈
+int page = 0;
+
+float sumP = 0, sumV = 0, sumI = 0;
+float beforeP = 0;
+float afterP = 0, afterV = 0, afterI = 0;
+float rate = 0;       // 증가율 (%)
+float energyWh = 0;   // 누적 발전량
 
 void setup() {
-  horizontalMotor.attach(9);       // D9 MG90S: azimuth, positional 20–160°
-  verticalMotor.attach(10);        // D10 MG90S: elevation, positional 20–160°
-  horizontalMotor.write(horizontalPos);
-  verticalMotor.write(verticalPos);
+  servoH.attach(9);
+  servoV.attach(10);
+  servoH.write(angleH);
+  servoV.write(angleV);
 
-  lcd1.init(); lcd1.backlight(); lcd1.clear();
-  lcd1.setCursor(0, 0); lcd1.print("SYSTEM START");
-  lcd1.setCursor(0, 1); lcd1.print("WAIT...");
-  lcd2.init(); lcd2.backlight(); lcd2.clear();
-  lcd2.setCursor(0, 0); lcd2.print("AFTER TRACK");
-  lcd2.setCursor(0, 1); lcd2.print("WAIT...");
+  lcd1.init();
+  lcd1.backlight();
+  lcd2.init();
+  lcd2.backlight();
+
   ina219.begin();
 
-  stateStarted = millis();
-  lastSample = stateStarted;
-  setSystemState("BEFORE");
-  Serial.println("Before measurement started");
-}
-
-void showTracking(int hError, int vError) {
-  lcd2.setCursor(0, 0); lcd2.print("TRACKING        ");
-  lcd2.setCursor(0, 1); lcd2.print("                ");
-  lcd2.setCursor(0, 1); lcd2.print("H:"); lcd2.print(hError); lcd2.print(" V:"); lcd2.print(vError);
-}
-
-float powerIncrease() {
-  if (beforePower <= 0) return 0;
-  return ((afterPower - beforePower) / beforePower) * 100;
-}
-
-void showResult() {
-  unsigned long now = millis();
-  if (now - lastResultPage >= 3000) { resultPage = 1 - resultPage; lastResultPage = now; }
-  lcd2.setCursor(0, 0); lcd2.print("                ");
-  lcd2.setCursor(0, 1); lcd2.print("                ");
-  if (resultPage == 0) {
-    lcd2.setCursor(0, 0); lcd2.print("AFTER "); lcd2.print(afterPower, 2); lcd2.print("W");
-    lcd2.setCursor(0, 1); lcd2.print("UP "); lcd2.print(powerIncrease(), 1); lcd2.print("%");
-  } else {
-    lcd2.setCursor(0, 0); lcd2.print("ENERGY "); lcd2.print(readEnergyWh(), 2); lcd2.print("Wh");
-    lcd2.setCursor(0, 1); lcd2.print("CO2 "); lcd2.print(readCO2Grams(), 2); lcd2.print("g");
-  }
+  showLcd1("BEFORE TRACK", "MEASURING...");
+  showLcd2("AFTER TRACK", "WAIT...");
 }
 
 void loop() {
-  unsigned long now = millis();
-  if (now - lastSample < SAMPLE_MS) { delay(10); return; }
-  lastSample = now;
-  float voltage = ina219.getBusVoltage_V();
-  float current = ina219.getCurrent_mA() / 1000;
-  float power = ina219.getPower_mW() / 1000; // Same INA219 path used by the real prototype.
+  // 현재 전압, 전류, 전력
+  float v = ina219.getBusVoltage_V();
+  float a = ina219.getCurrent_mA() / 1000.0;
+  if (a < 0) a = 0;
+  float p = v * a;
 
-  if (trackerState == 0) {
-    powerTotal = powerTotal + power; sampleCount = sampleCount + 1;
-    lcd2.setCursor(0, 0); lcd2.print("BEFORE MEASURE  ");
-    lcd2.setCursor(0, 1); lcd2.print("S:"); lcd2.print(sampleCount); lcd2.print("/50       ");
-    if (now - stateStarted >= 5000) {
-      beforePower = powerTotal / sampleCount;
-      setBeforePower(beforePower);
-      lcd1.setCursor(0, 0); lcd1.print("BEFORE TRACK    ");
-      lcd1.setCursor(0, 1); lcd1.print("                ");
-      lcd1.setCursor(0, 1); lcd1.print("P:"); lcd1.print(beforePower, 2); lcd1.print("W");
-      trackerState = 1; stableCount = 0; setSystemState("TRACKING");
-      Serial.println("Tracking started");
-    }
-  } else if (trackerState == 1) {
-    int left = (analogRead(A0) + analogRead(A2)) / 2;
-    int right = (analogRead(A1) + analogRead(A3)) / 2;
-    int top = (analogRead(A0) + analogRead(A1)) / 2;
-    int bottom = (analogRead(A2) + analogRead(A3)) / 2;
-    int hError = (right - left) * SENSOR_POLARITY;
-    int vError = (top - bottom) * SENSOR_POLARITY;
-    showTracking(hError, vError);
-    if (abs(hError) > TOLERANCE) { horizontalPos = constrain(horizontalPos + (hError > 0 ? STEP_SIZE : -STEP_SIZE) * HORIZONTAL_DIR, 20, 160); horizontalMotor.write(horizontalPos); }
-    if (abs(vError) > TOLERANCE) { verticalPos = constrain(verticalPos + (vError > 0 ? STEP_SIZE : -STEP_SIZE) * VERTICAL_DIR, 20, 160); verticalMotor.write(verticalPos); }
-    if (abs(hError) <= TOLERANCE && abs(vError) <= TOLERANCE) stableCount = stableCount + 1; else stableCount = 0;
-    if (stableCount >= STABLE_READINGS) {
-      trackerState = 2; stateStarted = now; setSystemState("STABILIZING");
-      lcd2.setCursor(0, 0); lcd2.print("TRACK COMPLETE  ");
-      lcd2.setCursor(0, 1); lcd2.print("WAIT 30 SEC     ");
-      Serial.println("Tracking complete");
-    }
-  } else if (trackerState == 2) {
-    if (now - stateStarted >= 30000) { trackerState = 3; stateStarted = now; powerTotal = 0; sampleCount = 0; setSystemState("AFTER"); Serial.println("After measurement started"); }
-  } else if (trackerState == 3) {
-    powerTotal = powerTotal + power; sampleCount = sampleCount + 1;
-    lcd2.setCursor(0, 0); lcd2.print("AFTER MEASURE   ");
-    lcd2.setCursor(0, 1); lcd2.print("S:"); lcd2.print(sampleCount); lcd2.print("/50       ");
-    if (now - stateStarted >= 5000) { afterPower = powerTotal / sampleCount; setAfterPower(afterPower); setPowerComparison(beforePower, afterPower); trackerState = 4; lastResultPage = now; setSystemState("RESULT"); Serial.println("After measurement complete"); }
-  } else {
-    // RESULT is not a permanent stop: a changed LDR vector starts a new real cycle.
-    int left = (analogRead(A0) + analogRead(A2)) / 2;
-    int right = (analogRead(A1) + analogRead(A3)) / 2;
-    int top = (analogRead(A0) + analogRead(A1)) / 2;
-    int bottom = (analogRead(A2) + analogRead(A3)) / 2;
-    int hError = (right - left) * SENSOR_POLARITY;
-    int vError = (top - bottom) * SENSOR_POLARITY;
-    if (abs(hError) > TOLERANCE || abs(vError) > TOLERANCE) {
-      trackerState = 0; stateStarted = now; lastSample = now; powerTotal = 0; sampleCount = 0; stableCount = 0;
-      setSystemState("BEFORE");
-      lcd2.setCursor(0, 0); lcd2.print("BEFORE MEASURE  ");
-      lcd2.setCursor(0, 1); lcd2.print("LIGHT CHANGED   ");
-      Serial.println("Light changed: new measurement cycle");
-    } else {
-      showResult();
+  // 누적 발전량 : 0.1초 = 0.1/3600 시간
+  energyWh = energyWh + p * 0.1 / 3600.0;
+
+  // 추적 전 측정(step 0) 때는 모터를 움직이지 않음
+  bool ok = false;
+  if (step > 0) ok = track();
+
+  // 대기나 측정 중에 빛이 움직이면 다시 추적부터
+  if (step >= 2 && ok == false) {
+    step = 1;
+    count = 0;
+    sumP = 0; sumV = 0; sumI = 0;
+  }
+
+  if (step == 0) {
+    // 5초(50번) 평균
+    sumP = sumP + p;
+    count++;
+    if (count == 50) {
+      beforeP = sumP / 50;
+      showLcd1("BEFORE TRACK", "P:" + String(beforeP, 2) + "W");
+      sumP = 0;
+      count = 0;
+      step = 1;
     }
   }
+  else if (step == 1) {
+    // 10번 연속 정렬되면 추적 완료
+    if (ok) count++;
+    else count = 0;
+
+    showLcd2("TRACKING", "H:" + String(errH) + " V:" + String(errV));
+
+    if (count == 10) {
+      showLcd2("TRACK COMPLETE", "WAIT 30 SEC");
+      count = 0;
+      step = 2;
+    }
+  }
+  else if (step == 2) {
+    // 30초(300번) 대기
+    count++;
+    if (count == 300) {
+      showLcd2("AFTER MEASURE", "MEASURING...");
+      count = 0;
+      step = 3;
+    }
+  }
+  else if (step == 3) {
+    // 5초(50번) 평균
+    sumP = sumP + p;
+    sumV = sumV + v;
+    sumI = sumI + a;
+    count++;
+    if (count == 50) {
+      afterP = sumP / 50;
+      afterV = sumV / 50;
+      afterI = sumI / 50;
+
+      if (beforeP > 0.01) rate = (afterP - beforeP) / beforeP * 100;
+      else rate = 0;
+
+      showLcd2("AFTER TRACK", "P:" + String(afterP, 2) + "W");
+      sumP = 0; sumV = 0; sumI = 0;
+      count = 0;
+      page = 0;
+      step = 4;
+    }
+  }
+  else if (step == 4) {
+    // 3초(30번)마다 결과 화면 넘기기
+    count++;
+    if (count == 30) {
+      count = 0;
+      showPage();
+      page++;
+      if (page > 3) page = 0;
+    }
+  }
+
   delay(100);
+}
+
+// 빛 방향으로 모터 1도씩 이동, 정렬됐으면 true
+// 모터가 반대로 가면 ++ 와 -- 를 서로 바꾸면 됨
+bool track() {
+  int tl = analogRead(A0);   // 좌상
+  int tr = analogRead(A1);   // 우상
+  int bl = analogRead(A2);   // 좌하
+  int br = analogRead(A3);   // 우하
+
+  errH = (tl + bl) / 2 - (tr + br) / 2;
+  errV = (tl + tr) / 2 - (bl + br) / 2;
+
+  if (errH > RANGE) angleH--;
+  if (errH < -RANGE) angleH++;
+  if (errV > RANGE) angleV++;
+  if (errV < -RANGE) angleV--;
+
+  // MG90S 안전 범위 20~160도
+  angleH = constrain(angleH, 20, 160);
+  angleV = constrain(angleV, 20, 160);
+
+  servoH.write(angleH);
+  servoV.write(angleV);
+
+  if (abs(errH) <= RANGE && abs(errV) <= RANGE) return true;
+  return false;
+}
+
+// 결과 화면 4페이지
+void showPage() {
+  if (page == 0) showLcd2("AFTER POWER", String(afterP, 2) + "W " + String(rate, 1) + "%");
+  if (page == 1) showLcd2("VOLT / CURRENT", String(afterV, 2) + "V " + String(afterI, 2) + "A");
+  if (page == 2) showLcd2("ENERGY", String(energyWh, 3) + "Wh");
+  // 0.4541 kgCO2/kWh = 0.4541 gCO2/Wh 라서 Wh에 바로 곱하면 g
+  if (page == 3) showLcd2("CO2 REDUCTION", String(energyWh * 0.4541, 3) + "g");
+}
+
+// LCD 두 줄 출력 (뒤에 공백을 붙여 이전 글자를 지움)
+void showLcd1(String line1, String line2) {
+  lcd1.setCursor(0, 0);
+  lcd1.print(line1 + "                ");
+  lcd1.setCursor(0, 1);
+  lcd1.print(line2 + "                ");
+}
+
+void showLcd2(String line1, String line2) {
+  lcd2.setCursor(0, 0);
+  lcd2.print(line1 + "                ");
+  lcd2.setCursor(0, 1);
+  lcd2.print(line2 + "                ");
 }`;
 
 const state = { running:false, compiled:null, scope:{}, loopDelay:.18, nextLoop:0, h:90, v:90,
@@ -184,6 +236,9 @@ function makeLcd(address){const key=address===0x26?'26':address===0x27?'27':Stri
 // Optional INA219 current/power monitor on the same virtual I²C bus (A4/A5).
 // Values are derived from the physical panel model, just as the real sensor would observe them.
 function makeIna219(address=0x40){return {address,ready:false,begin(){this.ready=true;serialPrint(`INA219.begin(0x${this.address.toString(16).toUpperCase()})`);return true;},getBusVoltage_V(){return state.voltage;},getShuntVoltage_mV(){return state.current*.1;},getCurrent_mA(){return state.current*1000;},getPower_mW(){return state.power*1000;},getLoadVoltage_V(){return state.voltage+this.getShuntVoltage_mV()/1000;},setCalibration_32V_2A(){},setCalibration_32V_1A(){},setCalibration_16V_400mA(){}};}
+// Arduino String(value, decimals) compatibility for code typed in the editor.
+// It keeps ordinary text intact and formats numeric values just like String(float, digits).
+function arduinoString(value, decimals){if(typeof value==='number'&&Number.isInteger(decimals)&&decimals>=0)return value.toFixed(decimals);return String(value);}
 
 // The default sketch calls these helpers. They write through the two actual I2C LCD objects.
 function writeLcdScreen(lcd, line1, line2){if(!lcd)return;const next=[String(line1).slice(0,16).padEnd(16,' '),String(line2).slice(0,16).padEnd(16,' ')];if(lcd.lines[0]===next[0]&&lcd.lines[1]===next[1])return;lcd.batch=true;lcd.clear();lcd.setCursor(0,0);lcd.print(next[0]);lcd.setCursor(0,1);lcd.print(next[1]);lcd.batch=false;lcd.notify();}
@@ -223,8 +278,8 @@ function compileSketch(){try{const source=$('codeEditor').value;if(!/void\s+setu
   globals.replace(/\bAdafruit_INA219\s+([A-Za-z_]\w*)\s*(?:\(\s*(0x[\da-fA-F]+|\d+)\s*\))?\s*;/g,(_,name,address)=>{state.scope[name]=makeIna219(address===undefined?0x40:Number(address));return '';});
   globals.replace(/\bServo\s+([A-Za-z_]\w*)\s*;/g,(_,name)=>{state.scope[name]=makeServo(name);return '';});
   globals.replace(/\bLiquidCrystal_I2C\s+([A-Za-z_]\w*)\s*\(\s*(0x[\da-fA-F]+|\d+)[^)]*\)\s*;/g,(_,name,address)=>{state.scope[name]=makeLcd(Number(address));return '';});
-  globals.replace(/\b(?:const\s+)?(?:unsigned\s+long|int|float|double|long|bool|boolean)\s+([A-Za-z_]\w*)\s*(?:=\s*([^;]+))?\s*;/g,(_,name,raw)=>{state.scope[name]=raw?Number(Function(`return (${raw})`)()):0;return '';});
-  const api={A0,A1,A2,A3,A4,A5,HIGH:1,LOW:0,Math,analogRead:pin=>state.pins[`A${pin}`]??0,constrain:(n,lo,hi)=>clamp(+n,+lo,+hi),abs:Math.abs,min:Math.min,max:Math.max,round:Math.round,map:(x,a,b,c,d)=>(x-a)*(d-c)/(b-a)+c,delay:ms=>{state.loopDelay=Math.max(.01,(+ms||0)/1000);},millis:()=>Math.round(state.elapsed*1000),readPower:()=>state.power,readVoltage:()=>state.voltage,readCurrent:()=>state.current,readEnergyWh:()=>state.energy,readCO2Grams:()=>state.co2Kg*1000,setSystemState:value=>{state.systemState=String(value);},setBeforePower:value=>{state.beforePower=+value;},setAfterPower:value=>{state.afterPower=+value;},setPowerComparison:(before,after)=>{state.beforePower=+before;state.afterPower=+after;state.increaseRate=before?((after-before)/before)*100:0;},beginAutoTracking,runAutoTracking,Serial:{begin(){},print:serialPrint,println:serialPrint},pinMode(){},digitalWrite(){}};
+  globals.replace(/\b(?:const\s+)?(?:unsigned\s+long|int|float|double|long|bool|boolean)\s+([^;]+);/g,(_,declarations)=>{declarations.split(',').forEach(declaration=>{const match=/^\s*([A-Za-z_]\w*)\s*(?:=\s*(.+))?\s*$/.exec(declaration);if(!match)return;const[,name,raw]=match;state.scope[name]=raw?Number(Function(`return (${raw})`)()):0;});return '';});
+  const api={A0,A1,A2,A3,A4,A5,HIGH:1,LOW:0,Math,String:arduinoString,analogRead:pin=>state.pins[`A${pin}`]??0,constrain:(n,lo,hi)=>clamp(+n,+lo,+hi),abs:Math.abs,min:Math.min,max:Math.max,round:Math.round,map:(x,a,b,c,d)=>(x-a)*(d-c)/(b-a)+c,delay:ms=>{state.loopDelay=Math.max(.01,(+ms||0)/1000);},millis:()=>Math.round(state.elapsed*1000),readPower:()=>state.power,readVoltage:()=>state.voltage,readCurrent:()=>state.current,readEnergyWh:()=>state.energy,readCO2Grams:()=>state.co2Kg*1000,setSystemState:value=>{state.systemState=String(value);},setBeforePower:value=>{state.beforePower=+value;},setAfterPower:value=>{state.afterPower=+value;},setPowerComparison:(before,after)=>{state.beforePower=+before;state.afterPower=+after;state.increaseRate=before?((after-before)/before)*100:0;},beginAutoTracking,runAutoTracking,Serial:{begin(){},print:serialPrint,println:serialPrint},pinMode(){},digitalWrite(){}};
   Object.assign(state.scope,api);const functionSource=functions.map(fn=>`function ${fn.name}(${jsParams(fn.params)}){${transform(fn.body)}}`).join('\n');state.compiled=new Function('scope',`with(scope){${functionSource}\nreturn {setup,loop};}`)(state.scope);state.loopDelay=.18;state.compiled.setup();state.compiled.loop();renderAll();setMessage('컴파일 성공 — setup()과 사용자 함수를 준비했습니다.','ok');return true;
 }catch(error){state.running=false;setMessage(`컴파일 오류: ${error.message}`,'error');serialPrint(`ERROR: ${error.message}`);return false;}}
 function runLoop(){if(!state.compiled){if(!compileSketch())return;}try{state.loopDelay=.18;state.compiled.loop();}catch(error){state.running=false;setMessage(`실행 오류: ${error.message}`,'error');serialPrint(`RUNTIME ERROR: ${error.message}`);}}

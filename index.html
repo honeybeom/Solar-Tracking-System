@@ -1,14 +1,78 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="description" content="Arduino Uno code-to-hardware solar tracker simulator"><title>Uno Solar Lab | 코드 실행 시뮬레이터</title><link rel="stylesheet" href="styles.css"><script src="app.js" defer></script></head>
-<body><main class="app-shell">
-<header class="topbar"><div><p class="eyebrow">ARDUINO UNO · CODE → HARDWARE SIMULATION</p><h1>Uno Solar Lab <span>코드 실행 시뮬레이터</span></h1></div><div class="compile-state" id="compileState"><i></i><span>기본 스케치 준비됨</span></div></header>
-<section class="intro"><strong>작성한 Arduino 스타일 코드가 가상 Uno 핀과 연결됩니다.</strong> A0–A3 LDR 값, D9/D10 서보, 0x26/0x27 LCD가 <em>코드 실행 결과</em>에 따라 바뀝니다. 아래 기본 코드를 수정한 뒤 <b>컴파일·적용</b>을 누르세요.</section>
-<section class="main-grid"><section class="panel editor-panel"><div class="panel-heading"><div><span class="kicker">SKETCH.ino</span><h2>Arduino Uno 코드</h2></div><span class="mini" id="codeLines">0 lines</span></div><textarea id="codeEditor" spellcheck="false" aria-label="Arduino code editor"></textarea><div class="editor-actions"><button class="accent" id="compileBtn">✓ 컴파일 · 적용</button><button id="runBtn">▶ 실행</button><button id="stepBtn">↻ loop() 1회</button><button id="resetBtn">↺ 보드 초기화</button><button class="quiet" id="exampleBtn">기본 예제 복원</button></div><div class="compile-message" id="compileMessage">기본 예제를 수정하거나 그대로 적용해 보세요.</div></section>
-<aside class="panel api-panel"><div class="panel-heading"><div><span class="kicker">SUPPORTED API</span><h2>실행 가능한 Uno 명령</h2></div></div><div class="api-list"><code>analogRead(A0 ... A3)</code><small>4개 LDR 센서값(0–1023)</small><code>Servo.attach(9 / 10)</code><small>D9 수평, D10 수직 서보 연결</small><code>Servo.write(), Servo.read()</code><small>20–160° 범위로 동작</small><code>LiquidCrystal_I2C</code><small>0x26 / 0x27, print·clear·setCursor</small><code>delay(), constrain(), abs()</code><small>루프 속도·계산 제어</small><code>if / else, int / float</code><small>변수·산술·조건문 지원</small></div><div class="pin-note"><b>가상 보드 연결</b><br>A0 TL · A1 TR · A2 BL · A3 BR<br>D9 Azimuth Servo · D10 Elevation Servo<br>A4/SDA · A5/SCL I²C LCD / INA219</div></aside></section>
-<section class="control-bar panel"><div><span class="kicker">PHYSICAL ENVIRONMENT</span><strong>빛 환경 (코드 밖의 실제 조건)</strong></div><label>빛 방향 <output id="lightAzOut"></output><input id="lightAz" type="range" min="20" max="160" value="128"></label><label>빛 높이 <output id="lightElOut"></output><input id="lightEl" type="range" min="20" max="160" value="118"></label><label>빛 세기 <output id="intensityOut"></output><input id="intensity" type="range" min="10" max="100" value="85"></label><label>실행 속도 <select id="speed"><option value="1">1×</option><option value="3">3×</option><option value="8">8×</option><option value="15">15×</option></select></label></section>
-<section class="control-bar panel calibration-bar"><div><span class="kicker">SIMULATED PANEL PARAMETERS</span><strong>패널·탄소 파라미터</strong></div><label>최대 패널 출력 <output id="maxPowerOut"></output><input id="maxPower" type="range" min="1" max="20" step="0.5" value="5"></label><label>CO₂ 계수 (kg/kWh)<output id="co2FactorOut"></output><input id="co2Factor" type="number" min="0" max="2" step="0.0001" value="0.4541"></label><div class="control-note">MG90S positional servo<br>D9/D10: 20–160°</div></section>
-<section class="hardware-grid"><section class="panel rig-panel"><div class="panel-heading"><div><span class="kicker">INTERACTIVE 3D MODEL</span><h2>가상 태양광 추적기</h2></div><span class="run-chip" id="runChip">STOPPED</span></div><div class="viewer-wrap"><canvas id="rigCanvas" width="900" height="470" aria-label="회전 가능한 3D 태양광 추적기 모델"></canvas><div class="viewer-help">드래그: 시점 회전 · 휠: 확대/축소 · 청록 화살표: 패널 법선</div><button class="view-reset" id="viewReset">시점 초기화</button></div><div class="motor-row"><div><span>D9 · HORIZONTAL</span><strong id="hAngle">90°</strong></div><div><span>D10 · VERTICAL</span><strong id="vAngle">90°</strong></div><div><span>POWER MODEL</span><strong id="power">0.00 W</strong></div><div><span>INCIDENCE θ</span><strong id="incidence">0.0°</strong></div><div><span>ALIGNMENT</span><strong id="alignment">0.0%</strong></div></div></section>
-<section class="panel pin-panel"><div class="panel-heading"><div><span class="kicker">LIVE PIN MONITOR</span><h2>Uno 핀 상태</h2></div></div><div class="sensor-board"><div class="sensor tl"><span>A0</span><b id="a0">0000</b><small>TOP LEFT</small></div><div class="sensor tr"><span>A1</span><b id="a1">0000</b><small>TOP RIGHT</small></div><div class="divider-v"></div><div class="divider-h"></div><div class="sensor bl"><span>A2</span><b id="a2">0000</b><small>BOTTOM LEFT</small></div><div class="sensor br"><span>A3</span><b id="a3">0000</b><small>BOTTOM RIGHT</small></div></div><div class="calc-grid"><div><span>LEFT AVG</span><b id="leftAvg">0.0</b></div><div><span>RIGHT AVG</span><b id="rightAvg">0.0</b></div><div><span>H ERR</span><b id="hError">0.0</b></div><div><span>TOP AVG</span><b id="topAvg">0.0</b></div><div><span>BOTTOM AVG</span><b id="bottomAvg">0.0</b></div><div><span>V ERR</span><b id="vError">0.0</b></div></div><div class="power-telemetry"><div><span>VOLTAGE</span><b id="voltage">0.00 V</b></div><div><span>CURRENT</span><b id="current">0.00 A</b></div><div><span>ENERGY</span><b id="energy">0.000 Wh</b></div></div><div class="result-telemetry"><div><span>STATE</span><b id="systemState">IDLE</b></div><div><span>BEFORE AVG</span><b id="beforePower">—</b></div><div><span>AFTER AVG</span><b id="afterPower">—</b></div><div><span>IMPROVEMENT</span><b id="improvement">—</b></div><div><span>CO₂ AVOIDED</span><b id="co2">0.00 g</b></div></div></section></section>
-<section class="panel verification-panel" aria-labelledby="verificationTitle"><div class="panel-heading"><div><span class="kicker">SIMULATION DESIGN VERIFICATION</span><h2 id="verificationTitle">탄소 저감량 산정 · 제어 프로그램 검증</h2></div><button class="accent" id="verifyBtn">✓ 현재 상태 검증</button></div><p class="verification-intro">실시간 전압·전류·발전량, CO₂ 산정식, A0–A3 입력, D9/D10 서보, I²C LCD 출력을 함께 대조합니다.</p><div class="verification-grid"><article class="verification-card"><h3>1. 탄소 저감량 산정 회로 및 프로그램</h3><div class="formula-box"><span>전력 검산</span><b id="verifyPowerFormula">0.00 V × 0.000 A = 0.00 W</b><small id="verifyPowerDelta">INA219 전력값과 비교 대기</small></div><div class="formula-box"><span>누적 에너지 · 탄소 저감</span><b id="verifyCarbonFormula">0.000 Wh × 0.4541 g/Wh = 0.000 g</b><small>CO₂ 계수는 상단 패널·탄소 파라미터에서 조정할 수 있습니다.</small></div><div class="verification-lcd-map"><div><b>LCD1 · 0x26</b><span>추적 전 평균 발전량</span></div><div><b>LCD2 · 0x27</b><span>추적·사후 측정·결과</span></div></div></article><article class="verification-card"><h3>2. 시뮬레이션 설계 검증</h3><ul class="verification-list"><li><span>D9 수평축 / D10 수직축 독립 제어</span><b id="verifyServo">대기</b></li><li><span>A0–A3 CdS 입력과 수평·수직 오차</span><b id="verifyLdr">대기</b></li><li><span>LCD 2개 주소별 독립 버퍼 출력</span><b id="verifyLcd">대기</b></li><li><span>전력 · 에너지 · CO₂ 계산 연결</span><b id="verifyMath">대기</b></li></ul><div class="verification-evidence"><span>현재 제어 근거</span><b id="verifyEvidence">코드를 컴파일·적용하면 핀 연결 상태가 표시됩니다.</b></div></article></div><div class="verification-result" id="verificationResult" role="status">검증 버튼을 누르면 현재 시뮬레이션 상태를 보고서 형식으로 기록합니다.</div></section>
-<section class="bottom-grid"><section class="panel lcd-panel"><div class="panel-heading"><div><span class="kicker">I²C BUS OUTPUT</span><h2>LCD는 코드의 print() 결과를 표시합니다</h2></div></div><div class="lcd-grid"><article><div class="lcd-title">LCD1 · ADDRESS 0x26</div><div class="lcd" id="lcd26"><span>                </span><span>                </span></div></article><article><div class="lcd-title">LCD2 · ADDRESS 0x27</div><div class="lcd" id="lcd27"><span>                </span><span>                </span></div></article></div></section><section class="panel serial-panel"><div class="panel-heading"><div><span class="kicker">SERIAL MONITOR</span><h2>실행 로그</h2></div><button class="quiet small" id="clearLog">지우기</button></div><div id="serialLog" class="serial-log"></div></section></section>
-<footer>지원 범위: 교육용 Arduino Uno 문법 일부. 실제 라이브러리·인터럽트·복잡한 클래스는 컴파일 대상이 아닙니다.</footer></main></body></html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Arduino Uno 2-axis solar tracker simulation">
+  <title>Uno Solar Lab | 2축 태양광 추적기</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div><p class="eyebrow">ARDUINO UNO · 2-AXIS SOLAR TRACKER</p><h1>2축 태양광 추적기 <span>시뮬레이터</span></h1></div>
+      <div class="top-actions"><button class="accent" id="compileBtn">코드 적용</button><button id="runBtn">▶ 실행</button><button id="resetBtn">↺ 초기화</button><span class="compile-state" id="compileState"><i></i><span>기본 스케치 준비됨</span></span></div>
+    </header>
+
+    <section class="control-bar panel" aria-label="빛 환경 설정">
+      <div><span class="kicker">LIGHT ENVIRONMENT</span><strong>빛 환경</strong></div>
+      <label>빛 방향 <output id="lightAzOut"></output><input id="lightAz" type="range" min="20" max="160" value="128"></label>
+      <label>빛 높이 <output id="lightElOut"></output><input id="lightEl" type="range" min="20" max="160" value="118"></label>
+      <label>빛 세기 <output id="intensityOut"></output><input id="intensity" type="range" min="10" max="100" value="85"></label>
+      <label>실행 속도 <select id="speed"><option value="1">1×</option><option value="3">3×</option><option value="8">8×</option><option value="15">15×</option></select></label>
+    </section>
+
+    <section class="dashboard-grid">
+      <section class="panel editor-panel">
+        <div class="panel-heading"><div><span class="kicker">SKETCH.ino</span><h2>Arduino Uno 제어 코드</h2></div><span class="mini" id="codeLines">0 lines</span></div>
+        <textarea id="codeEditor" spellcheck="false" aria-label="Arduino code editor"></textarea>
+        <p class="compile-message" id="compileMessage">기본 코드를 수정한 뒤 코드 적용을 누르세요.</p>
+        <div class="hidden-controls" aria-hidden="true"><button id="stepBtn">loop</button><button id="exampleBtn">예제</button></div>
+      </section>
+
+      <section class="visual-column">
+        <section class="panel rig-panel">
+          <div class="panel-heading"><div><span class="kicker">INTERACTIVE 3D MODEL</span><h2>가상 태양광 추적기</h2></div><span class="run-chip" id="runChip">STOPPED</span></div>
+          <div class="viewer-wrap"><canvas id="rigCanvas" width="900" height="470" aria-label="회전 가능한 3D 태양광 추적기 모델"></canvas><div class="viewer-help">드래그: 시점 회전 · 휠: 확대/축소</div><button class="view-reset" id="viewReset">시점 초기화</button></div>
+          <div class="motor-row"><div><span>D9 · 수평</span><strong id="hAngle">90°</strong></div><div><span>D10 · 수직</span><strong id="vAngle">90°</strong></div><div><span>발전 전력</span><strong id="power">0.00 W</strong></div><div><span>입사각</span><strong id="incidence">0.0°</strong></div><div><span>정렬도</span><strong id="alignment">0.0%</strong></div></div>
+        </section>
+        <section class="panel lcd-panel lcd-emphasis">
+          <div class="panel-heading"><div><span class="kicker">I²C LCD OUTPUT</span><h2>추적 전 · 후 결과 비교</h2></div><span class="lcd-note">코드의 print() 출력</span></div>
+          <div class="lcd-grid"><article><div class="lcd-title">LCD1 · 0x26 · 추적 전</div><div class="lcd" id="lcd26"><span>                </span><span>                </span></div></article><article><div class="lcd-title">LCD2 · 0x27 · 추적 후 / 결과</div><div class="lcd" id="lcd27"><span>                </span><span>                </span></div></article></div>
+        </section>
+      </section>
+
+      <aside class="monitor-column">
+        <section class="panel telemetry-panel">
+          <div class="panel-heading"><div><span class="kicker">LIVE MONITOR</span><h2>센서 · 발전 상태</h2></div></div>
+          <div class="sensor-board"><div class="sensor"><span>A0 · 좌상</span><b id="a0">0000</b></div><div class="sensor"><span>A1 · 우상</span><b id="a1">0000</b></div><div class="sensor"><span>A2 · 좌하</span><b id="a2">0000</b></div><div class="sensor"><span>A3 · 우하</span><b id="a3">0000</b></div></div>
+          <div class="calc-grid"><div><span>좌 / 우 오차</span><b id="hError">0.0</b></div><div><span>상 / 하 오차</span><b id="vError">0.0</b></div><div><span>전압</span><b id="voltage">0.00 V</b></div><div><span>전류</span><b id="current">0.000 A</b></div><div><span>누적 발전량</span><b id="energy">0.000 Wh</b></div><div><span>탄소 저감</span><b id="co2">0.00 g</b></div></div>
+          <div class="result-telemetry"><div><span>진행 상태</span><b id="systemState">IDLE</b></div><div><span>추적 전</span><b id="beforePower">—</b></div><div><span>추적 후</span><b id="afterPower">—</b></div><div><span>증가율</span><b id="improvement">—</b></div></div>
+          <div class="hidden-values" aria-hidden="true"><b id="leftAvg"></b><b id="rightAvg"></b><b id="topAvg"></b><b id="bottomAvg"></b></div>
+        </section>
+
+        <section class="panel torque-panel">
+          <div class="panel-heading"><div><span class="kicker">MG90S LOAD CHECK</span><h2>서보 하중 · 토크</h2></div><span id="torqueVerdict" class="torque-verdict">계산 중</span></div>
+          <div class="torque-inputs">
+            <label>서보 전압<select id="servoVoltage"><option value="4.8">4.8V · 1.8 kgf·cm</option><option value="6" selected>6.0V · 2.2 kgf·cm</option></select></label>
+            <label>패널 가로 (mm)<input id="panelWidth" type="number" min="50" max="1000" value="215"></label>
+            <label>패널 세로 (mm)<input id="panelHeight" type="number" min="50" max="1000" value="180"></label>
+            <label>D10 기울임 질량 (kg)<input id="tiltMass" type="number" min="0.01" max="10" step="0.01" value="0.30"></label>
+            <label>D10 무게중심 거리 (cm)<input id="tiltOffset" type="number" min="0" max="100" step="0.1" value="3.0"></label>
+            <label>D9 회전 질량 (kg)<input id="rotationMass" type="number" min="0.01" max="20" step="0.01" value="1.50"></label>
+            <label>D9 중심 불균형 (cm)<input id="rotationOffset" type="number" min="0" max="30" step="0.05" value="0.25"></label>
+          </div>
+          <div class="torque-summary"><div><span>D9 필요 / 허용</span><b id="d9Torque">0.00 / 0.00 kgf·cm</b></div><div><span>D10 현재 / 최대</span><b id="d10Torque">0.00 / 0.00 kgf·cm</b></div><div><span>안전 사용 한계(55%)</span><b id="safeTorque">0.00 kgf·cm</b></div></div>
+          <p id="torqueAdvice" class="torque-advice">질량과 무게중심 거리를 입력하면 MG90S 사용 가능성을 계산합니다.</p>
+        </section>
+      </aside>
+    </section>
+
+    <details class="panel verification-panel"><summary><span><b>설계 검증</b><small>전력·탄소 계산, D9/D10, LDR, LCD 연동 상태</small></span><button class="accent" id="verifyBtn" type="button">현재 상태 검증</button></summary><div class="verification-grid"><article><h3>탄소 저감량 산정</h3><p id="verifyPowerFormula">0.00 V × 0.000 A = 0.00 W</p><p id="verifyCarbonFormula">0.000 Wh × 0.4541 g/Wh = 0.000 g</p><small id="verifyPowerDelta">INA219 전력값과 비교 대기</small></article><article><h3>제어 연동</h3><ul class="verification-list"><li>D9/D10 독립 제어 <b id="verifyServo">대기</b></li><li>A0–A3 CdS 입력 <b id="verifyLdr">대기</b></li><li>LCD 0x26 / 0x27 <b id="verifyLcd">대기</b></li><li>전력·에너지·CO₂ <b id="verifyMath">대기</b></li></ul><p id="verifyEvidence">코드를 적용하면 현재 연동 상태가 표시됩니다.</p></article></div><p class="verification-result" id="verificationResult">검증 버튼을 누르면 현재 결과를 기록합니다.</p></details>
+
+    <section class="panel serial-panel"><div class="panel-heading"><div><span class="kicker">SERIAL MONITOR</span><h2>실행 로그</h2></div><button class="quiet small" id="clearLog">지우기</button></div><div id="serialLog" class="serial-log"></div></section>
+    <footer>고정 기준: 5W 패널 · CO₂ 0.4541 kgCO₂/kWh · MG90S 20~160° · INA219 0x40 · LCD 0x26 / 0x27</footer>
+  </main>
+</body>
+</html>

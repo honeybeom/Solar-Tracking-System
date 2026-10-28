@@ -65,11 +65,14 @@
           </div>
           <div class="torque-summary"><div><span>D9 필요 / 허용</span><b id="d9Torque">0.00 / 0.00 kgf·cm</b></div><div><span>D10 현재 / 최대</span><b id="d10Torque">0.00 / 0.00 kgf·cm</b></div><div><span>안전 사용 한계(55%)</span><b id="safeTorque">0.00 kgf·cm</b></div></div>
           <p id="torqueAdvice" class="torque-advice">질량과 무게중심 거리를 입력하면 MG90S 사용 가능성을 계산합니다.</p>
+          <div class="collision-heading"><span class="kicker">3D CLEARANCE CHECK</span><b>기구 간섭 · 충돌 검증</b><span id="collisionVerdict" class="collision-verdict">계산 중</span></div>
+          <div class="collision-grid"><div><span>베이스 / 회전판</span><b id="clearBase">—</b></div><div><span>알루미늄 기둥</span><b id="clearPillars">—</b></div><div><span>D10 수직 서보</span><b id="clearD10">—</b></div><div><span>D9 수평 서보</span><b id="clearD9">—</b></div></div>
+          <p id="collisionAdvice" class="collision-advice">패널 외곽과 베이스·기둥·서보 하우징의 최소 간격을 계속 계산합니다.</p>
         </section>
       </aside>
     </section>
 
-    <details class="panel verification-panel"><summary><span><b>설계 검증</b><small>전력·탄소 계산, D9/D10, LDR, LCD 연동 상태</small></span><button class="accent" id="verifyBtn" type="button">현재 상태 검증</button></summary><div class="verification-grid"><article><h3>탄소 저감량 산정</h3><p id="verifyPowerFormula">0.00 V × 0.000 A = 0.00 W</p><p id="verifyCarbonFormula">0.000 Wh × 0.4541 g/Wh = 0.000 g</p><small id="verifyPowerDelta">INA219 전력값과 비교 대기</small></article><article><h3>제어 연동</h3><ul class="verification-list"><li>D9/D10 독립 제어 <b id="verifyServo">대기</b></li><li>A0–A3 CdS 입력 <b id="verifyLdr">대기</b></li><li>LCD 0x26 / 0x27 <b id="verifyLcd">대기</b></li><li>전력·에너지·CO₂ <b id="verifyMath">대기</b></li></ul><p id="verifyEvidence">코드를 적용하면 현재 연동 상태가 표시됩니다.</p></article></div><p class="verification-result" id="verificationResult">검증 버튼을 누르면 현재 결과를 기록합니다.</p></details>
+    <details class="panel verification-panel"><summary><span><b>설계 검증</b><small>전력·탄소 계산, D9/D10, LDR, LCD, 기구 간섭 상태</small></span><button class="accent" id="verifyBtn" type="button">현재 상태 검증</button></summary><div class="verification-grid"><article><h3>탄소 저감량 산정</h3><p id="verifyPowerFormula">0.00 V × 0.000 A = 0.00 W</p><p id="verifyCarbonFormula">0.000 Wh × 0.4541 g/Wh = 0.000 g</p><small id="verifyPowerDelta">INA219 전력값과 비교 대기</small></article><article><h3>제어 연동</h3><ul class="verification-list"><li>D9/D10 · 토크 <b id="verifyServo">대기</b></li><li>기구 간섭 · 충돌 <b id="verifyCollision">대기</b></li><li>A0–A3 CdS 입력 <b id="verifyLdr">대기</b></li><li>LCD 0x26 / 0x27 <b id="verifyLcd">대기</b></li><li>전력·에너지·CO₂ <b id="verifyMath">대기</b></li></ul><p id="verifyEvidence">코드를 적용하면 현재 연동 상태가 표시됩니다.</p></article></div><p class="verification-result" id="verificationResult">검증 버튼을 누르면 현재 결과를 기록합니다.</p></details>
 
     <section class="panel serial-panel"><div class="panel-heading"><div><span class="kicker">SERIAL MONITOR</span><h2>실행 로그</h2></div><button class="quiet small" id="clearLog">지우기</button></div><div id="serialLog" class="serial-log"></div></section>
     <footer>고정 기준: 5W 패널 · CO₂ 0.4541 kgCO₂/kWh · MG90S 20~160° · INA219 0x40 · LCD 0x26 / 0x27</footer>

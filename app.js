@@ -355,6 +355,10 @@ function drawRig(){
   const rotateCamera=([x,y,z])=>{const cy=Math.cos(viewer.yaw),sy=Math.sin(viewer.yaw),cp=Math.cos(viewer.pitch),sp=Math.sin(viewer.pitch);const nx=x*cy+z*sy,nz=-x*sy+z*cy;return [nx,y*cp-nz*sp,y*sp+nz*cp];};
   const project=p=>{const q=rotateCamera(p),scale=viewer.zoom*720/(720+q[2]);return {x:w*.5+q[0]*scale,y:h*.75-q[1]*scale,z:q[2],s:scale};};
   const poly=(points,fill,stroke='#3d6b75')=>{const pp=points.map(project);ctx.fillStyle=fill;ctx.strokeStyle=stroke;ctx.lineWidth=1.3;ctx.beginPath();ctx.moveTo(pp[0].x,pp[0].y);pp.slice(1).forEach(p=>ctx.lineTo(p.x,p.y));ctx.closePath();ctx.fill();ctx.stroke();return pp;};
+  // STL facets need depth ordering.  Drawing them in raw file order made the
+  // supplied components look like a translucent placeholder, even though the
+  // correct STL was loaded.  Queue and paint far-to-near for a solid CAD view.
+  const cadFaces=[];
   const line=(a,b,color,width=2,dash=[])=>{const p=project(a),q=project(b);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.setLineDash(dash);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();ctx.setLineDash([]);};
   const disk=(center,r,yColor,edge)=>{const pts=[];for(let i=0;i<28;i++){const a=i*Math.PI*2/28;pts.push([center[0]+Math.cos(a)*r,center[1],center[2]+Math.sin(a)*r]);}poly(pts,yColor,edge);};
   const box=(center,size,top='#4d6e76',side='#203f49',edge='#87aeb0')=>{const [x,y,z]=center,[sx,sy,sz]=size.map(v=>v/2),v=[[x-sx,y-sy,z-sz],[x+sx,y-sy,z-sz],[x+sx,y+sy,z-sz],[x-sx,y+sy,z-sz],[x-sx,y-sy,z+sz],[x+sx,y-sy,z+sz],[x+sx,y+sy,z+sz],[x-sx,y+sy,z+sz]];[[0,1,2,3],[1,5,6,2],[5,4,7,6],[4,0,3,7],[3,2,6,7]].forEach((face,i)=>poly(face.map(i=>v[i]),i===4?top:side,edge));return v;};
@@ -363,7 +367,8 @@ function drawRig(){
   const yaw=(state.h-90)*Math.PI/180,cy=Math.cos(yaw),sy=Math.sin(yaw);
   const azPoint=point=>rotateAzimuth(point,state.h);
   const azBox=(center,size,top='#4d6e76',side='#203f49',edge='#87aeb0')=>{const [x,y,z]=center,[sx,sy,sz]=size.map(v=>v/2),v=[[x-sx,y-sy,z-sz],[x+sx,y-sy,z-sz],[x+sx,y+sy,z-sz],[x-sx,y+sy,z-sz],[x-sx,y-sy,z+sz],[x+sx,y-sy,z+sz],[x+sx,y+sy,z+sz],[x-sx,y+sy,z+sz]].map(azPoint);[[0,1,2,3],[1,5,6,2],[5,4,7,6],[4,0,3,7],[3,2,6,7]].forEach((face,i)=>poly(face.map(i=>v[i]),i===4?top:side,edge));return v;};
-  const drawCadMesh=(mesh,center,scale,color,transform=point=>point)=>{if(!mesh)return;mesh.triangles.forEach(triangle=>{const points=triangle.map(vertex=>transform([center[0]+(vertex[0]-mesh.center[0])*scale,center[1]+(vertex[2]-mesh.center[2])*scale,center[2]+(vertex[1]-mesh.center[1])*scale]));poly(points,color,'#24454d');});};
+  const drawCadMesh=(mesh,center,scale,color,transform=point=>point)=>{if(!mesh)return;mesh.triangles.forEach(triangle=>{const points=triangle.map(vertex=>transform([center[0]+(vertex[0]-mesh.center[0])*scale,center[1]+(vertex[2]-mesh.center[2])*scale,center[2]+(vertex[1]-mesh.center[1])*scale]));const depth=points.reduce((total,point)=>total+rotateCamera(point)[2],0)/3;cadFaces.push({points,color,depth});});};
+  const flushCadMeshes=()=>cadFaces.sort((a,b)=>b.depth-a.depth).forEach(face=>poly(face.points,face.color,'#183842'));
   const ground=[];for(let z=-450;z<=450;z+=75)ground.push([[-430,0,z],[430,0,z]]);for(let x=-420;x<=420;x+=70)ground.push([[x,0,-450],[x,0,450]]);ground.forEach(([a,b])=>line(a,b,'#173d47',.65));
   // CAD assembly base: layered 200 mm acrylic plate → supplied 155 mm bearing
   // → printed 30:1 worm wheel.  This deliberately replaces the former generic
@@ -407,6 +412,7 @@ function drawRig(){
   const elHorn=azPoint([-58,profileTop,-58]),elArm=azPoint([-58,profileTop+Math.sin(tilt)*35,-58+Math.cos(tilt)*35]);
   line(elHorn,elArm,'#f2cb55',5);line(elArm,panelPoint([-48,-42,-28]),'#b8d8d7',4);
   const elCenter=project(elHorn);ctx.fillStyle='#ffd96d';ctx.font='10px ui-monospace';ctx.fillText('NEMA17-V · 30:1',elCenter.x-50,elCenter.y+31);
+  flushCadMeshes();
   // Real module construction: aluminium frame, 5 W cell field, rear diagonal
   // bracket and the LDR divider.  Every element below is transformed by D9+D10.
   panelBox([0,0,-5],[panelHalfW*2+18,panelHalfH*2+18,12],'#dce7e7','#97afb3');

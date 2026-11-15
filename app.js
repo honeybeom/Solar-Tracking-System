@@ -227,15 +227,6 @@ const state = { running:false, compiled:null, scope:{}, loopDelay:.18, nextLoop:
   systemState:'IDLE', beforePower:null, afterPower:null, increaseRate:null, collision:{safe:true,items:[],minimum:0} };
 // Orbit-camera state for the mouse/touch controlled 3D model.
 const viewer = { yaw:.62, pitch:-.33, zoom:.80, drag:null };
-// Real meshes extracted from the supplied CAD archive. They are sampled for the
-// lightweight canvas renderer, while the full STL files remain available as assets.
-const cadMeshes=Object.create(null);
-function loadCadStl(key,url,maxTriangles){fetch(url).then(response=>response.arrayBuffer()).then(buffer=>{const view=new DataView(buffer),count=view.getUint32(80,true),stride=Math.max(1,Math.ceil(count/maxTriangles)),min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity],triangles=[];for(let index=0;index<count;index++){const base=84+index*50;for(let vertex=0;vertex<3;vertex++){for(let axis=0;axis<3;axis++){const value=view.getFloat32(base+12+vertex*12+axis*4,true);if(value<min[axis])min[axis]=value;if(value>max[axis])max[axis]=value;}}if(index%stride===0){triangles.push([0,1,2].map(vertex=>[view.getFloat32(base+12+vertex*12,true),view.getFloat32(base+16+vertex*12,true),view.getFloat32(base+20+vertex*12,true)]));}}cadMeshes[key]={triangles,center:min.map((value,axis)=>(value+max[axis])/2)};serialPrint(`CAD mesh loaded: ${key} (${triangles.length} faces)`);}).catch(()=>serialPrint(`CAD mesh unavailable: ${key}`));}
-// These files are the supplied printable / purchased CAD parts, not generated
-// placeholder geometry.  The remaining aluminium profiles and acrylic plates
-// are dimensioned from the assembly drawing.
-[['bearingLower','assets/cad/bearing-lower.stl',220],['bearingUpper','assets/cad/bearing-upper.stl',220],['bearingHousing','assets/cad/bearing-housing.stl',180],['nema17','assets/cad/nema17.stl',340],['nemaBracket','assets/cad/nema17-bracket.stl',260],['lcd1602','assets/cad/lcd1602.stl',260],['wormWheel','assets/cad/worm-wheel.stl',520],['worm','assets/cad/worm.stl',240]].forEach(([key,url,count])=>loadCadStl(key,url,count));
-
 function env() { const lightAzimuth=+$('lightAz').value,lightElevation=+$('lightEl').value;return { lightAzimuth,lightElevation,az:lightAzimuth,el:lightElevation,intensity:85,speed:+$('speed').value,maxPower:5,co2Factor:.4541 }; }
 function mechanics(){const value=(id,fallback)=>{const raw=$(id)?.value;const n=raw===''||raw===undefined?fallback:+raw;return Number.isFinite(n)?Math.max(0,n):fallback;};return {width:value('panelWidth',215),height:value('panelHeight',180),bearingSide:155,bearingHeight:10,nema:[42,59.2,42],gearRatio:30,fullSteps:200,microsteps:8,stepsPerDegree:133.333};}
 function updateTorqueSimulation(){const m=mechanics(),resolution=1.8/m.gearRatio/m.microsteps;$('d9Torque').textContent=`${m.stepsPerDegree.toFixed(2)} step/°`;$('d10Torque').textContent=`${m.stepsPerDegree.toFixed(2)} step/°`;$('safeTorque').textContent=`${resolution.toFixed(4)}° / µstep`;$('torqueVerdict').textContent='CAD 적용';$('torqueVerdict').className='torque-verdict safe';$('torqueAdvice').textContent=`CAD 치수: 패널 ${m.width.toFixed(0)}×${m.height.toFixed(0)} mm · NEMA17 ${m.nema.join('×')} mm · 30:1 웜기어 · 155×155×10 mm 회전 베어링. 코드의 STEPS_PER_DEG=${m.stepsPerDegree.toFixed(3)}은 1/8 microstep 기준입니다.`;return {status:'safe',safe:true,stepsPerDegree:m.stepsPerDegree,resolution};}
@@ -248,7 +239,11 @@ const dot3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 const sub3=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
 const length3=v=>Math.hypot(v[0],v[1],v[2]);
 const worldPerMm=1.2;
-function panelObb(azimuth=state.h,elevation=state.v){const m=mechanics(),tilt=(elevation-90)*Math.PI/180,ct=Math.cos(tilt),st=Math.sin(tilt),turn=v=>rotateAzimuth(v,azimuth);return {center:turn([0,panelMountHeight,0]),axes:[turn([1,0,0]),turn([0,ct,-st]),turn([0,st,ct])],half:[m.width*worldPerMm/2,m.height*worldPerMm/2,4]};}
+// Mechanical zero: the photographed / supplied CAD structure has the module
+// above the posts, facing upward at a 90° elevation command.  This calibration
+// offset is part of the real bracket geometry, not a canvas-only animation.
+const panelTiltRadians=(elevation=state.v)=>elevation*Math.PI/180;
+function panelObb(azimuth=state.h,elevation=state.v){const m=mechanics(),tilt=panelTiltRadians(elevation),ct=Math.cos(tilt),st=Math.sin(tilt),turn=v=>rotateAzimuth(v,azimuth);return {center:turn([0,panelMountHeight,0]),axes:[turn([1,0,0]),turn([0,ct,-st]),turn([0,st,ct])],half:[m.width*worldPerMm/2,m.height*worldPerMm/2,4]};}
 function makeBox(id,label,center,size){return {id,label,center,size,half:size.map(v=>v/2)};}
 function boxCorners(box){const out=[];for(const sx of [-1,1])for(const sy of [-1,1])for(const sz of [-1,1])out.push([box.center[0]+sx*box.half[0],box.center[1]+sy*box.half[1],box.center[2]+sz*box.half[2]]);return out;}
 function obbCorners(obb){const out=[];for(const sx of [-1,1])for(const sy of [-1,1])for(const sz of [-1,1])out.push(obb.center.map((v,i)=>v+sx*obb.axes[0][i]*obb.half[0]+sy*obb.axes[1][i]*obb.half[1]+sz*obb.axes[2][i]*obb.half[2]));return out;}
@@ -263,7 +258,10 @@ function clearanceText(value){return value===0?'0 mm · 충돌':`${(value/worldP
 function updateCollisionSimulation(){const collision=getCollisionState();state.collision=collision;const base=collisionByGroup(collision,['base','turntable']),posts=collisionByGroup(collision,['post--48--34','post--48-34','post-48--34','post-48-34']),d10=collisionByGroup(collision,['d10']),d9=collisionByGroup(collision,['d9']);[['clearBase',base],['clearPillars',posts],['clearD10',d10],['clearD9',d9]].forEach(([id,value])=>{$(id).textContent=clearanceText(value);$(id).className=value===0?'collision-hit':'';});const verdict=$('collisionVerdict');verdict.textContent=collision.safe?'간섭 없음':'충돌 감지';verdict.className=`collision-verdict ${collision.safe?'safe':'risk'}`;$('collisionAdvice').textContent=collision.safe?`현재 NEMA17-H ${state.h}° · NEMA17-V ${state.v}°에서 최소 근사 간격은 ${(collision.minimum/worldPerMm).toFixed(1)} mm입니다. STEP/DIR 위치 명령은 충돌 경로를 막습니다.`:'패널이 구조물과 겹칩니다. 해당 스테퍼 위치 명령은 차단했습니다. 패널 크기·힌지 높이·기둥 위치를 조정하세요.';return collision;}
 function updateEnvironment() {
   const e=env(), hOff=clamp((e.lightAzimuth-state.h)/48,-1,1), vOff=clamp((e.lightElevation-state.v)/48,-1,1);
-  const vectorForAngles=(azimuth,elevation)=>{const az=(azimuth-90)*Math.PI/180,el=(elevation-90)*Math.PI/180,ce=Math.cos(el);return [Math.sin(az)*ce,Math.sin(el),Math.cos(az)*ce];};
+  // This is the same kinematic convention used by panelWorldPoint(): at D10
+  // 90° the panel normal points up; D10 changes its real elevation about the
+  // hinge, while D9 remains an independent vertical-axis azimuth rotation.
+  const vectorForAngles=(azimuth,elevation)=>{const az=(azimuth-90)*Math.PI/180,el=panelTiltRadians(elevation),ce=Math.cos(el);return [Math.sin(az)*ce,Math.sin(el),Math.cos(az)*ce];};
   state.lightDirection=vectorForAngles(e.lightAzimuth,e.lightElevation);state.panelNormal=vectorForAngles(state.h,state.v);const dot=clamp(state.lightDirection[0]*state.panelNormal[0]+state.lightDirection[1]*state.panelNormal[1]+state.lightDirection[2]*state.panelNormal[2],-1,1),incidence=Math.max(0,dot);
   state.incidenceAngle=Math.acos(dot)*180/Math.PI;
   state.alignment=incidence;
@@ -275,13 +273,13 @@ function updateEnvironment() {
   state.voltage=16+2*incidence; // Educational PV model: voltage varies gently, current carries irradiance change.
   state.current=state.voltage>0?state.power/state.voltage:0;
 }
-// Shared MG90S kinematics.  Every part of the rendered panel uses these exact
-// D9/D10 angles; there is no canvas-only animation state.
+// Shared tracker kinematics. Every rendered moving part and the power model
+// uses these exact command angles; there is no canvas-only animation state.
 function rotateAzimuth(point,azimuth=state.h){const yaw=(azimuth-90)*Math.PI/180,cy=Math.cos(yaw),sy=Math.sin(yaw),[x,y,z]=point;return [x*cy+z*sy,y,-x*sy+z*cy];}
 // The panel hinge sits above the profile tops. At neutral D10=90°, its lowest
 // edge clears the columns instead of appearing to hang between them.
 const panelMountHeight=260,profileTop=140;
-function panelWorldPoint(point,azimuth=state.h,elevation=state.v){const tilt=(elevation-90)*Math.PI/180,ct=Math.cos(tilt),st=Math.sin(tilt),[x,y,z]=point;return rotateAzimuth([x,y*ct+z*st+panelMountHeight,-y*st+z*ct],azimuth);}
+function panelWorldPoint(point,azimuth=state.h,elevation=state.v){const tilt=panelTiltRadians(elevation),ct=Math.cos(tilt),st=Math.sin(tilt),[x,y,z]=point;return rotateAzimuth([x,y*ct+z*st+panelMountHeight,-y*st+z*ct],azimuth);}
 function esc(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function serialPrint(message){state.serial.push({time:state.elapsed,text:String(message)});if(state.serial.length>300)state.serial.shift();renderSerial();}
 function renderSerial(){$('serialLog').innerHTML=state.serial.map(l=>`<div><time>${l.time.toFixed(2).padStart(6,'0')}s</time>${esc(l.text)}</div>`).join('');$('serialLog').scrollTop=$('serialLog').scrollHeight;}
@@ -347,8 +345,9 @@ function updateDesignVerification(){syncGraduationSketchTelemetry();const voltag
 function runDesignVerification(){const result=updateDesignVerification(),passed=[result.servoReady,result.collisionSafe,result.ldrReady,result.lcdReady,result.mathReady].filter(Boolean).length;const report=$('verificationResult');if(!result.compiled){report.className='verification-result wait';report.textContent='검증 대기: 먼저 기본 코드를 컴파일·적용한 뒤 실행하세요.';return;}report.className=passed===5?'verification-result pass':'verification-result wait';report.textContent=`검증 완료 · ${passed}/5 PASS · ${state.systemState} · ${state.elapsed.toFixed(1)} s · 전력/에너지/CO₂, D9·D10·LCD 및 기구 간섭을 현재 값으로 대조했습니다.`;serialPrint(`Design verification: ${passed}/5 PASS`);}
 function renderAll(){syncGraduationSketchTelemetry();const p=state.pins,l=state.ldr;$('a0').textContent=String(p.A0).padStart(4,'0');$('a1').textContent=String(p.A1).padStart(4,'0');$('a2').textContent=String(p.A2).padStart(4,'0');$('a3').textContent=String(p.A3).padStart(4,'0');$('leftAvg').textContent=l.left.toFixed(1);$('rightAvg').textContent=l.right.toFixed(1);$('topAvg').textContent=l.top.toFixed(1);$('bottomAvg').textContent=l.bottom.toFixed(1);$('hError').textContent=(l.right-l.left).toFixed(1);$('vError').textContent=(l.top-l.bottom).toFixed(1);$('hAngle').textContent=`${state.h}°`;$('vAngle').textContent=`${state.v}°`;$('power').textContent=`${state.power.toFixed(2)} W`;$('incidence').textContent=`${state.incidenceAngle.toFixed(1)}°`;$('voltage').textContent=`${state.voltage.toFixed(2)} V`;$('current').textContent=`${state.current.toFixed(2)} A`;$('energy').textContent=`${state.energy.toFixed(3)} Wh`;$('lcd26').innerHTML=lcdText('26').map(x=>`<span>${esc(x)}</span>`).join('');$('lcd27').innerHTML=lcdText('27').map(x=>`<span>${esc(x)}</span>`).join('');$('runChip').textContent=state.running?(state.auto?.phase||'RUNNING'):'STOPPED';$('runChip').classList.toggle('running',state.running);$('runBtn').textContent=state.auto?.phase==='FINAL'?'↻ 새 측정':state.running?'Ⅱ 일시정지':'▶ 실행';updateDesignVerification();drawRig();}
 function drawRig(){const c=$('rigCanvas'),x=c.getContext('2d'),w=c.width,h=c.height,e=env();x.clearRect(0,0,w,h);const lx=w*(.54+(e.az-90)/360),ly=71+(160-e.el)*.42,g=x.createRadialGradient(lx,ly,5,lx,ly,100);g.addColorStop(0,'rgba(255,225,112,.95)');g.addColorStop(.22,'rgba(255,190,72,.28)');g.addColorStop(1,'rgba(255,190,72,0)');x.fillStyle=g;x.beginPath();x.arc(lx,ly,100,0,Math.PI*2);x.fill();x.fillStyle='#ffe89c';x.beginPath();x.arc(lx,ly,17,0,Math.PI*2);x.fill();const bx=w*.5,by=h*.81;x.strokeStyle='#396772';x.lineWidth=16;x.beginPath();x.moveTo(bx,by);x.lineTo(bx,by-105);x.stroke();x.fillStyle='#163f4a';x.beginPath();x.ellipse(bx,by,160,34,0,0,Math.PI*2);x.fill();const rot=(state.h-90)*Math.PI/180,tilt=(state.v-90)*Math.PI/180;x.save();x.translate(bx,by-120);x.rotate(rot*.18);x.transform(1,Math.sin(tilt)*.32,0,Math.max(.42,Math.cos(tilt)*.72),0,0);x.fillStyle='#12385d';x.strokeStyle='#65d1dd';x.lineWidth=4;x.fillRect(-180,-88,360,176);x.strokeRect(-180,-88,360,176);x.strokeStyle='#3c819d';x.lineWidth=1;for(let a=-144;a<180;a+=36){x.beginPath();x.moveTo(a,-88);x.lineTo(a,88);x.stroke()}for(let b=-59;b<88;b+=30){x.beginPath();x.moveTo(-180,b);x.lineTo(180,b);x.stroke()}x.fillStyle='#071820';x.fillRect(-40,-40,80,80);x.strokeStyle='#66efe2';x.lineWidth=2;x.strokeRect(-40,-40,80,80);x.beginPath();x.moveTo(0,-40);x.lineTo(0,40);x.moveTo(-40,0);x.lineTo(40,0);x.stroke();[[-20,-20],[20,-20],[-20,20],[20,20]].forEach(([a,b])=>{x.fillStyle='#e2fa8b';x.beginPath();x.arc(a,b,5,0,Math.PI*2);x.fill()});x.restore();x.fillStyle='#a2c6ca';x.font='12px ui-monospace';x.fillText(`LIGHT ${e.az}° / ${e.el}°`,lx+24,ly+4);x.fillText(`D9 = ${state.h}°`,bx-220,by-14);x.fillText(`D10 = ${state.v}°`,bx+118,by-90);}
-// Canvas 3D renderer: lightweight perspective projection, no external library required.
-function drawRig(){
+// Retained only during this source edit; the active renderer below is rebuilt
+// from the provided design reference, not from this former CAD placeholder.
+function legacyCadRig(){
   const canvas=$('rigCanvas'),ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height,e=env();
   const collisionIds=new Set((state.collision?.items||[]).filter(item=>item.collision).map(item=>item.id));
   ctx.clearRect(0,0,w,h);ctx.fillStyle='#071b24';ctx.fillRect(0,0,w,h);
@@ -427,6 +426,61 @@ function drawRig(){
   const panelCenter=panelPoint([0,0,4]),sun=[panelCenter[0]+state.lightDirection[0]*360,panelCenter[1]+state.lightDirection[1]*360,panelCenter[2]+state.lightDirection[2]*360],sunP=project(sun),target=project(panelCenter);const glow=ctx.createRadialGradient(sunP.x,sunP.y,4,sunP.x,sunP.y,42*sunP.s);glow.addColorStop(0,'#fff3b6');glow.addColorStop(.24,'#ffd56b99');glow.addColorStop(1,'#ffd56b00');ctx.fillStyle=glow;ctx.beginPath();ctx.arc(sunP.x,sunP.y,42*sunP.s,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff0a0';ctx.beginPath();ctx.arc(sunP.x,sunP.y,10*sunP.s,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#f5d26988';ctx.lineWidth=1;ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(sunP.x,sunP.y);ctx.lineTo(target.x,target.y);ctx.stroke();ctx.setLineDash([]);
   ctx.fillStyle='#b5d4d4';ctx.font='12px ui-monospace';ctx.fillText(`SUN ${e.az}° / ${e.el}°`,sunP.x+13,sunP.y-8);ctx.fillStyle='#8bc8c7';ctx.fillText(`NEMA17-H ${state.h}° · NEMA17-V ${state.v}° · θ ${state.incidenceAngle.toFixed(1)}°`,14,25);ctx.font='10px ui-monospace';ctx.fillText('SUPPLIED CAD ASSEMBLY: 5W 215×180 · 155 BEARING · NEMA17 BRACKET · 30:1 WORM',14,43);if(collisionIds.size){ctx.fillStyle='#ffaaa5';ctx.font='bold 12px ui-monospace';ctx.fillText('⚠ COLLISION DETECTED — STEPPER MOVE BLOCKED',14,62);}const azText=project([-150,84,-60]),elText=project(elHorn);ctx.fillStyle='#ffe074';ctx.font='bold 10px ui-monospace';ctx.fillText('NEMA17-H · AZIMUTH',azText.x-52,azText.y-16);ctx.fillText('NEMA17-V · ELEVATION',elText.x-58,elText.y+31);
 }
+
+// -----------------------------------------------------------------------------
+// Design-reference renderer
+// Rebuilt from the user's supplied design image: square acrylic base, circular
+// rotating plate, rear housing, twin aluminium profiles, angled support and a
+// white-framed black-cell solar module. No previous STL/CAD mesh is rendered.
+function drawRig(){
+  const canvas=$('rigCanvas'),ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height,m=mechanics();
+  const e=env(),yaw=viewer.yaw,pitch=viewer.pitch;
+  ctx.clearRect(0,0,w,h);ctx.fillStyle='#071b24';ctx.fillRect(0,0,w,h);
+  const camera=([x,y,z])=>{const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch),rx=x*cy+z*sy,rz=-x*sy+z*cy;return [rx,y*cp-rz*sp,y*sp+rz*cp];};
+  const project=point=>{const q=camera(point),s=viewer.zoom*720/(720+q[2]);return {x:w*.5+q[0]*s,y:h*.79-q[1]*s,z:q[2],s};};
+  const poly=(points,fill,stroke='#496a70')=>{const p=points.map(project);ctx.fillStyle=fill;ctx.strokeStyle=stroke;ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(p[0].x,p[0].y);p.slice(1).forEach(q=>ctx.lineTo(q.x,q.y));ctx.closePath();ctx.fill();ctx.stroke();};
+  const line=(a,b,color,width=2,dash=[])=>{const p=project(a),q=project(b);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.setLineDash(dash);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();ctx.setLineDash([]);};
+  const box=(center,size,top,side,transform=point=>point)=>{const [x,y,z]=center,[a,b,c]=size.map(v=>v/2),v=[[x-a,y-b,z-c],[x+a,y-b,z-c],[x+a,y+b,z-c],[x-a,y+b,z-c],[x-a,y-b,z+c],[x+a,y-b,z+c],[x+a,y+b,z+c],[x-a,y+b,z+c]].map(transform);[[0,1,2,3],[1,5,6,2],[5,4,7,6],[4,0,3,7],[3,2,6,7]].forEach((face,index)=>poly(face.map(i=>v[i]),index===4?top:side));};
+  const disk=(center,r,fill,stroke)=>{const q=[];for(let i=0;i<32;i++){const a=i*Math.PI*2/32;q.push([center[0]+Math.cos(a)*r,center[1],center[2]+Math.sin(a)*r]);}poly(q,fill,stroke);};
+  const az=point=>rotateAzimuth(point,state.h),panel=point=>panelWorldPoint(point,state.h,state.v);
+  // Ground and the two-layer 200 × 200 acrylic base from the reference image.
+  for(let z=-330;z<=330;z+=55)line([-330,0,z],[330,0,z],'#123942',.55);for(let x=-330;x<=330;x+=55)line([x,0,-330],[x,0,330],'#123942',.55);
+  box([0,-22,0],[235,7,235],'#dce8e8','#758c91');
+  box([0,-16,0],[225,7,225],'#0b1013','#1e3137');
+  box([0,-9,0],[212,6,212],'#ecf4f3','#748d93');
+  box([0,-3,0],[202,7,202],'#090c0f','#17262c');
+  disk([0,2,0],78,'#e9efef','#9db4b7');disk([0,7,0],72,'#cdd9d9','#6f898e');disk([0,11,0],59,'#253d43','#83aeb0');
+  // All items above the turntable use the D9 azimuth transform.
+  disk(az([0,15,0]),49,'#f4f5f2','#a6b5b4');
+  box([0,15,0],[110,8,110],'#1b2224','#0b1113',az);
+  // Back housing and sloped mechanical cover visible in the supplied drawing.
+  const cover=[[-72,18,-48],[-72,108,-48],[-24,168,-48],[24,152,-48],[24,18,-48],[-72,18,38],[-72,108,38],[-24,168,38],[24,152,38],[24,18,38]].map(az);
+  poly([cover[0],cover[1],cover[2],cover[3],cover[4]],'#111719','#070b0d');poly([cover[4],cover[3],cover[8],cover[9]],'#273337','#11191c');poly([cover[1],cover[6],cover[7],cover[2]],'#344247','#172125');poly([cover[2],cover[7],cover[8],cover[3]],'#1f292d','#0b1012');
+  // The four aluminium profiles and their grooves match the pictured central tower.
+  [[-38,-34],[38,-34],[-38,34],[38,34]].forEach(([x,z])=>{box([x,85,z],[18,142,18],'#e9eeee','#8b9ea0',az);[-5,0,5].forEach(dx=>line(az([x+dx,16,z-10]),az([x+dx,154,z-10]),'#526d72',.75));});
+  // Elevation hinge housing and two support arms. They remain attached to D9.
+  box([-5,161,-20],[98,22,58],'#dce5e4','#6e8588',az);
+  disk(az([0,172,-25]),24,'#313c3f','#b5c7c6');
+  line(az([-48,155,-20]),panel([-m.width*.55,0,-8]),'#bccdcb',6);
+  line(az([48,155,-20]),panel([m.width*.55,0,-8]),'#bccdcb',6);
+  line(az([0,172,-18]),panel([0,0,-10]),'#d9e4e2',8);
+  // 5 W module: thick white frame, black cells and silver grid exactly in the
+  // design-image style. The entire module follows D9 + D10 directly.
+  const halfW=m.width*worldPerMm/2,halfH=m.height*worldPerMm/2;
+  const panelQuad=(x0,y0,x1,y1,z,fill,stroke)=>poly([[x0,y0,z],[x1,y0,z],[x1,y1,z],[x0,y1,z]].map(panel),fill,stroke);
+  panelQuad(-halfW-12,-halfH-12,halfW+12,halfH+12,-6,'#f2f4f1','#798887');
+  panelQuad(-halfW-5,-halfH-5,halfW+5,halfH+5,1,'#0a0c0d','#e4ecea');
+  const cols=7,rows=5,cellW=(halfW*2-16)/cols,cellH=(halfH*2-16)/rows;
+  for(let row=0;row<rows;row++)for(let col=0;col<cols;col++){const x0=-halfW+8+col*cellW,y0=-halfH+8+row*cellH;panelQuad(x0,y0,x0+cellW-2,y0+cellH-2,3,(row+col)%2?'#030507':'#07090b','#c6cfce');}
+  // Divider-shielded A0–A3 CdS sensor head on the panel face.
+  panelQuad(-36,-36,36,36,8,'#10191a','#77dcd4');line(panel([0,-38,10]),panel([0,38,10]),'#79ece1',2);line(panel([-38,0,10]),panel([38,0,10]),'#79ece1',2);
+  [[-19,-19],[19,-19],[-19,19],[19,19]].forEach(([x,y])=>{const c=panel([x,y,11]),p=project(c);ctx.fillStyle='#dcf47a';ctx.beginPath();ctx.arc(p.x,p.y,5*p.s,0,Math.PI*2);ctx.fill();});
+  // Power normal and the actual light-direction reference used in P=cos(theta).
+  const center=panel([0,0,12]),normal=panel([0,0,112]);line(center,normal,'#58f2e6',3);const n=project(normal);ctx.fillStyle='#7ffff2';ctx.font='bold 12px ui-monospace';ctx.fillText('N',n.x+5,n.y-4);
+  const sun=[center[0]+state.lightDirection[0]*330,center[1]+state.lightDirection[1]*330,center[2]+state.lightDirection[2]*330],sp=project(sun),cp=project(center),glow=ctx.createRadialGradient(sp.x,sp.y,3,sp.x,sp.y,45*sp.s);glow.addColorStop(0,'#fff3bd');glow.addColorStop(.25,'#ffd46b88');glow.addColorStop(1,'#ffd46b00');ctx.fillStyle=glow;ctx.beginPath();ctx.arc(sp.x,sp.y,45*sp.s,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff0a0';ctx.beginPath();ctx.arc(sp.x,sp.y,10*sp.s,0,Math.PI*2);ctx.fill();line(sun,center,'#f6d272',1,[5,5]);
+  ctx.fillStyle='#b9d6d4';ctx.font='11px ui-monospace';ctx.fillText(`D9 수평 ${state.h}°  ·  D10 수직 ${state.v}°  ·  입사각 ${state.incidenceAngle.toFixed(1)}°`,14,25);ctx.font='10px ui-monospace';ctx.fillText('제공 설계 이미지 기준: 아크릴 베이스 · 원형 회전판 · 프로파일 기둥 · 태양광 모듈',14,43);
+}
+
 function setup3dControls(){const c=$('rigCanvas');c.addEventListener('pointerdown',event=>{viewer.drag={x:event.clientX,y:event.clientY};c.setPointerCapture?.(event.pointerId);});c.addEventListener('pointermove',event=>{if(!viewer.drag)return;viewer.yaw+=(event.clientX-viewer.drag.x)*.012;viewer.pitch=clamp(viewer.pitch+(event.clientY-viewer.drag.y)*.009,-1.2,.45);viewer.drag={x:event.clientX,y:event.clientY};});['pointerup','pointercancel','pointerleave'].forEach(type=>c.addEventListener(type,()=>{viewer.drag=null;}));c.addEventListener('wheel',event=>{event.preventDefault();viewer.zoom=clamp(viewer.zoom-event.deltaY*.001,.62,1.85);},{passive:false});$('viewReset').addEventListener('click',()=>{viewer.yaw=.62;viewer.pitch=-.33;viewer.zoom=.80;});}
 function renderAll(){syncGraduationSketchTelemetry();const p=state.pins,l=state.ldr;$('a0').textContent=String(p.A0).padStart(4,'0');$('a1').textContent=String(p.A1).padStart(4,'0');$('a2').textContent=String(p.A2).padStart(4,'0');$('a3').textContent=String(p.A3).padStart(4,'0');$('leftAvg').textContent=l.left.toFixed(1);$('rightAvg').textContent=l.right.toFixed(1);$('topAvg').textContent=l.top.toFixed(1);$('bottomAvg').textContent=l.bottom.toFixed(1);$('hError').textContent=(l.right-l.left).toFixed(1);$('vError').textContent=(l.top-l.bottom).toFixed(1);$('hAngle').textContent=`${state.h}°`;$('vAngle').textContent=`${state.v}°`;$('power').textContent=`${state.power.toFixed(2)} W`;$('incidence').textContent=`${state.incidenceAngle.toFixed(1)}°`;$('alignment').textContent=`${(state.alignment*100).toFixed(1)}%`;$('voltage').textContent=`${state.voltage.toFixed(2)} V`;$('current').textContent=`${state.current.toFixed(3)} A`;$('energy').textContent=`${state.energy.toFixed(3)} Wh`;$('co2').textContent=state.co2Kg<.001?`${(state.co2Kg*1000).toFixed(2)} g`:`${state.co2Kg.toFixed(4)} kg`;$('systemState').textContent=state.systemState;$('beforePower').textContent=state.beforePower===null?'—':`${state.beforePower.toFixed(2)} W`;$('afterPower').textContent=state.afterPower===null?'—':`${state.afterPower.toFixed(2)} W`;$('improvement').textContent=state.increaseRate===null?'—':`${state.increaseRate.toFixed(1)}%`;$('lcd26').innerHTML=lcdText('26').map(x=>`<span>${esc(x)}</span>`).join('');$('lcd27').innerHTML=lcdText('27').map(x=>`<span>${esc(x)}</span>`).join('');$('runChip').textContent=state.running?state.systemState:'STOPPED';$('runChip').classList.toggle('running',state.running);$('runBtn').textContent=state.running?'Ⅱ 일시정지':'▶ 실행';updateTorqueSimulation();updateDesignVerification();drawRig();}
 function tick(t){if(state.lastFrame===null)state.lastFrame=t;let d=Math.min(.2,(t-state.lastFrame)/1000);state.lastFrame=t;updateEnvironment();if(state.running){d*=env().speed;state.elapsed+=d;state.energy+=state.power*d/3600;state.co2Kg=state.energy/1000*env().co2Factor;if(state.elapsed>=state.nextLoop){runLoop();state.nextLoop=state.elapsed+state.loopDelay;}}renderAll();requestAnimationFrame(tick);}

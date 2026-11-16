@@ -523,6 +523,11 @@ function drawRig(){
   line(cube[4],cube[5],'#e6ffff',2);line(cube[5],cube[6],'#e6ffff',2);line(cube[6],cube[7],'#e6ffff',2);line(cube[7],cube[4],'#e6ffff',2);
   box([0,108,0],[216,5,216],'rgba(225,250,250,.28)','rgba(155,200,204,.18)');
   box([-52,25,-108],[66,34,5],'#111719','#05080a');box([52,25,-108],[66,34,5],'#111719','#05080a');
+  // The user approved the lower acrylic enclosure, but requested that the
+  // unfinished upper assembly be removed completely before it is rebuilt.
+  // Stop here intentionally: no panel, posts, motors, gears, sensors, light,
+  // or temporary upper-frame geometry is rendered above the enclosure.
+  return;
   if(!drawSuppliedMesh('bearingLower',[0,112,0],155,point=>point,'#7e9193','#d9eeee'))disk([0,113,0],72,'#e8eeee','#a6b8b9');
   if(!drawSuppliedMesh('bearingUpper',[0,112,0],155,az,'#b7c9c9','#ecffff'))disk([0,117,0],58,'#1a2225','#9ab0b0');
   // All moving parts above the transparent cover use D9 azimuth.

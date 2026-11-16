@@ -277,7 +277,7 @@ const state = { running:false, compiled:null, scope:{}, loopDelay:.18, nextLoop:
 // Reference-camera pose: a centred front-right isometric view that keeps the
 // panel, elevation hinge, rotating base, and acrylic enclosure in one frame.
 // Both the initial render and “시점 초기화” use this one source of truth.
-const defaultViewerPose = Object.freeze({ yaw: .56, pitch: .78, zoom: .90 });
+const defaultViewerPose = Object.freeze({ yaw: .56, pitch: 1.03, zoom: 1.02 });
 const viewer = { ...defaultViewerPose, drag:null };
 function env() { const lightAzimuth=+$('lightAz').value,lightElevation=+$('lightEl').value;return { lightAzimuth,lightElevation,az:lightAzimuth,el:lightElevation,intensity:85,speed:+$('speed').value,maxPower:5,co2Factor:.4541 }; }
 function mechanics(){const value=(id,fallback)=>{const raw=$(id)?.value;const n=raw===''||raw===undefined?fallback:+raw;return Number.isFinite(n)?Math.max(0,n):fallback;};return {width:value('panelWidth',215),height:value('panelHeight',180),bearingSide:155,bearingHeight:10,nema:[42,59.2,42],gearRatio:30,fullSteps:200,microsteps:8,stepsPerDegree:133.333};}

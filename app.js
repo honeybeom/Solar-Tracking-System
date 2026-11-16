@@ -446,43 +446,39 @@ function drawRig(){
   // Stylised but kinematically placed worm mechanisms. Horizontal: a fixed
   // worm engages the rotating turntable wheel. Vertical: the second worm and
   // wheel stay on the azimuth assembly and drive only the panel hinge.
-  const horizontalGear=(center,r)=>{const edge=[];for(let i=0;i<30;i++){const a=i*Math.PI*2/30;edge.push(az([center[0]+Math.cos(a)*r,center[1],center[2]+Math.sin(a)*r]));}poly(edge,'#b8994a','#f1d97d');for(let i=0;i<30;i++){const a=i*Math.PI*2/30;line(az([center[0]+Math.cos(a)*(r-7),center[1]+2,center[2]+Math.sin(a)*(r-7)]),az([center[0]+Math.cos(a)*(r+5),center[1]+2,center[2]+Math.sin(a)*(r+5)]),'#f5d875',1.2);}};
-  const verticalGear=(center,r,transform)=>{const edge=[];for(let i=0;i<26;i++){const a=i*Math.PI*2/26;edge.push(transform([center[0],center[1]+Math.cos(a)*r,center[2]+Math.sin(a)*r]));}poly(edge,'#b8994a','#f1d97d');for(let i=0;i<26;i++){const a=i*Math.PI*2/26;line(transform([center[0],center[1]+Math.cos(a)*(r-6),center[2]+Math.sin(a)*(r-6)]),transform([center[0],center[1]+Math.cos(a)*(r+5),center[2]+Math.sin(a)*(r+5)]),'#f5d875',1.1);}};
-  const worm=(a,b,transform=point=>point,phase=0)=>{line(transform(a),transform(b),'#c79537',8);for(let i=0;i<12;i++){const t=i/11,px=a[0]+(b[0]-a[0])*t,py=a[1]+(b[1]-a[1])*t,pz=a[2]+(b[2]-a[2])*t,offset=((i+phase)%3-1)*3;line(transform([px-4,py-7,pz+offset]),transform([px+4,py+7,pz-offset]),'#ffe19a',1.6);}};
-  // Ground and the two-layer 200 × 200 acrylic base from the reference image.
+  const horizontalGear=(center,r)=>{const edge=[];for(let i=0;i<30;i++){const a=i*Math.PI*2/30;edge.push(az([center[0]+Math.cos(a)*r,center[1],center[2]+Math.sin(a)*r]));}poly(edge,'#232a2e','#9ca9aa');for(let i=0;i<30;i++){const a=i*Math.PI*2/30;line(az([center[0]+Math.cos(a)*(r-7),center[1]+2,center[2]+Math.sin(a)*(r-7)]),az([center[0]+Math.cos(a)*(r+5),center[1]+2,center[2]+Math.sin(a)*(r+5)]),'#aeb8b9',1.2);}};
+  const verticalGear=(center,r,transform)=>{const edge=[];for(let i=0;i<26;i++){const a=i*Math.PI*2/26;edge.push(transform([center[0],center[1]+Math.cos(a)*r,center[2]+Math.sin(a)*r]));}poly(edge,'#20272b','#98a5a6');for(let i=0;i<26;i++){const a=i*Math.PI*2/26;line(transform([center[0],center[1]+Math.cos(a)*(r-6),center[2]+Math.sin(a)*(r-6)]),transform([center[0],center[1]+Math.cos(a)*(r+5),center[2]+Math.sin(a)*(r+5)]),'#aab5b6',1.1);}};
+  const worm=(a,b,transform=point=>point,phase=0)=>{line(transform(a),transform(b),'#2e3539',8);for(let i=0;i<12;i++){const t=i/11,px=a[0]+(b[0]-a[0])*t,py=a[1]+(b[1]-a[1])*t,pz=a[2]+(b[2]-a[2])*t,offset=((i+phase)%3-1)*3;line(transform([px-4,py-7,pz+offset]),transform([px+4,py+7,pz-offset]),'#a3b0b1',1.6);}};
+  // Reference model: transparent acrylic enclosure with a black lower base.
   for(let z=-330;z<=330;z+=55)line([-330,0,z],[330,0,z],'#123942',.55);for(let x=-330;x<=330;x+=55)line([x,0,-330],[x,0,330],'#123942',.55);
-  box([0,-22,0],[235,7,235],'#dce8e8','#758c91');
-  box([0,-16,0],[225,7,225],'#0b1013','#1e3137');
-  box([0,-9,0],[212,6,212],'#ecf4f3','#748d93');
-  box([0,-3,0],[202,7,202],'#090c0f','#17262c');
-  disk([0,2,0],78,'#e9efef','#9db4b7');disk([0,7,0],72,'#cdd9d9','#6f898e');disk([0,11,0],59,'#253d43','#83aeb0');
-  // All items above the turntable use the D9 azimuth transform.
-  horizontalGear([0,13,0],63);
-  box([-93,25,-32],[64,28,38],'#38464a','#172126');
-  worm([-114,25,-12],[-53,25,-12],point=>point,Math.round(state.h/8));
-  // Exposed horizontal gearbox at the turntable rim: this makes the D9 drive
-  // inspectable instead of hiding it below the acrylic top plate.
-  verticalGear([76,47,-66],29,az);
-  worm([76,47,-125],[76,47,-95],az,Math.round(state.h/8));
-  box([76,47,-139],[34,34,18],'#303d41','#11191c',az);
-  disk(az([0,15,0]),49,'#f4f5f2','#a6b5b4');
-  box([0,15,0],[110,8,110],'#1b2224','#0b1113',az);
-  // Back housing and sloped mechanical cover visible in the supplied drawing.
-  const cover=[[-72,18,-48],[-72,108,-48],[-24,168,-48],[24,152,-48],[24,18,-48],[-72,18,38],[-72,108,38],[-24,168,38],[24,152,38],[24,18,38]].map(az);
-  poly([cover[0],cover[1],cover[2],cover[3],cover[4]],'#111719','#070b0d');poly([cover[4],cover[3],cover[8],cover[9]],'#273337','#11191c');poly([cover[1],cover[6],cover[7],cover[2]],'#344247','#172125');poly([cover[2],cover[7],cover[8],cover[3]],'#1f292d','#0b1012');
-  // The four aluminium profiles and their grooves match the pictured central tower.
-  [[-38,-34],[38,-34],[-38,34],[38,34]].forEach(([x,z])=>{box([x,85,z],[18,142,18],'#e9eeee','#8b9ea0',az);[-5,0,5].forEach(dx=>line(az([x+dx,16,z-10]),az([x+dx,154,z-10]),'#526d72',.75));});
+  box([0,-28,0],[232,10,232],'#111517','#030607');
+  box([0,-18,0],[220,8,220],'#9aa8a9','#2d3b3e');
+  box([0,-10,0],[210,8,210],'#080b0d','#111a1d');
+  // Clear cube walls, top plate, and front ventilation / access windows.
+  const cube=[[-105,-6,-105],[105,-6,-105],[105,-6,105],[-105,-6,105],[-105,108,-105],[105,108,-105],[105,108,105],[-105,108,105]];
+  poly([cube[0],cube[1],cube[5],cube[4]],'rgba(190,222,225,.18)','#b4d0d2');poly([cube[1],cube[2],cube[6],cube[5]],'rgba(190,222,225,.12)','#b4d0d2');poly([cube[3],cube[0],cube[4],cube[7]],'rgba(190,222,225,.13)','#b4d0d2');
+  line(cube[4],cube[5],'#e6ffff',2);line(cube[5],cube[6],'#e6ffff',2);line(cube[6],cube[7],'#e6ffff',2);line(cube[7],cube[4],'#e6ffff',2);
+  box([0,108,0],[216,5,216],'rgba(225,250,250,.28)','rgba(155,200,204,.18)');
+  box([-52,25,-108],[66,34,5],'#111719','#05080a');box([52,25,-108],[66,34,5],'#111719','#05080a');
+  disk([0,113,0],72,'#e8eeee','#a6b8b9');disk([0,117,0],58,'#1a2225','#9ab0b0');
+  // All moving parts above the transparent cover use D9 azimuth.
+  horizontalGear([0,120,0],54);disk(az([0,124,0]),46,'#eff4f3','#a9bbbb');
+  // Two central aluminium profiles and the black motor blocks inside the case.
+  [[-28,0],[28,0],[-28,34],[28,34]].forEach(([x,z])=>{box([x,166,z],[18,88,18],'#edf2f1','#7e9294',az);[-5,0,5].forEach(dx=>line(az([x+dx,122,z-10]),az([x+dx,210,z-10]),'#526d72',.75));});
+  box([-58,157,-24],[54,44,48],'#111719','#030507',az);box([57,169,-26],[50,44,48],'#111719','#030507',az);
+  // Visible black horizontal worm at the upper turntable rim.
+  verticalGear([73,139,-52],25,az);worm([73,139,-102],[73,139,-76],az,Math.round(state.h/8));box([73,139,-116],[34,32,18],'#222a2e','#0c1113',az);
   // Elevation hinge housing and two support arms. They remain attached to D9.
-  box([-5,161,-20],[98,22,58],'#dce5e4','#6e8588',az);
-  disk(az([0,172,-25]),24,'#313c3f','#b5c7c6');
-  // Exposed elevation gearbox at the right hinge: this stays with the D9
-  // assembly and its worm phase follows the D10 command.
-  verticalGear([65,173,-48],27,az);
-  worm([65,173,-103],[65,173,-76],az,Math.round(state.v/8));
-  box([65,173,-117],[34,35,18],'#39464a','#151d20',az);
-  line(az([-48,155,-20]),panel([-m.width*.55,0,-8]),'#bccdcb',6);
-  line(az([48,155,-20]),panel([m.width*.55,0,-8]),'#bccdcb',6);
-  line(az([0,172,-18]),panel([0,0,-10]),'#d9e4e2',8);
+  box([-5,212,-18],[98,22,58],'#dce5e4','#6e8588',az);
+  disk(az([0,223,-25]),24,'#313c3f','#b5c7c6');
+  // Black elevation worm / wheel at the right hinge, as exposed in the
+  // supplied reference rendering. It follows D10 but remains on the D9 frame.
+  verticalGear([65,223,-48],27,az);
+  worm([65,223,-103],[65,223,-76],az,Math.round(state.v/8));
+  box([65,223,-117],[34,35,18],'#20272b','#080c0e',az);
+  line(az([-48,205,-20]),panel([-m.width*.55,0,-8]),'#c5d4d2',6);
+  line(az([48,205,-20]),panel([m.width*.55,0,-8]),'#c5d4d2',6);
+  line(az([0,223,-18]),panel([0,0,-10]),'#e0e8e5',8);
   // 5 W module: thick white frame, black cells and silver grid exactly in the
   // design-image style. The entire module follows D9 + D10 directly.
   const halfW=m.width*worldPerMm/2,halfH=m.height*worldPerMm/2;
@@ -497,7 +493,7 @@ function drawRig(){
   // Power normal and the actual light-direction reference used in P=cos(theta).
   const center=panel([0,0,12]),normal=panel([0,0,112]);line(center,normal,'#58f2e6',3);const n=project(normal);ctx.fillStyle='#7ffff2';ctx.font='bold 12px ui-monospace';ctx.fillText('N',n.x+5,n.y-4);
   const sun=[center[0]+state.lightDirection[0]*330,center[1]+state.lightDirection[1]*330,center[2]+state.lightDirection[2]*330],sp=project(sun),cp=project(center),glow=ctx.createRadialGradient(sp.x,sp.y,3,sp.x,sp.y,45*sp.s);glow.addColorStop(0,'#fff3bd');glow.addColorStop(.25,'#ffd46b88');glow.addColorStop(1,'#ffd46b00');ctx.fillStyle=glow;ctx.beginPath();ctx.arc(sp.x,sp.y,45*sp.s,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff0a0';ctx.beginPath();ctx.arc(sp.x,sp.y,10*sp.s,0,Math.PI*2);ctx.fill();line(sun,center,'#f6d272',1,[5,5]);
-  ctx.fillStyle='#b9d6d4';ctx.font='11px ui-monospace';ctx.fillText(`D9 수평 ${state.h}°  ·  D10 수직 ${state.v}°  ·  입사각 ${state.incidenceAngle.toFixed(1)}°`,14,25);ctx.font='10px ui-monospace';ctx.fillText('설계 구조: 아크릴 베이스 · 수평/수직 웜·웜휠 · 원형 회전판 · 프로파일 기둥 · 태양광 모듈',14,43);
+  ctx.fillStyle='#b9d6d4';ctx.font='11px ui-monospace';ctx.fillText(`D9 수평 ${state.h}°  ·  D10 수직 ${state.v}°  ·  입사각 ${state.incidenceAngle.toFixed(1)}°`,14,25);ctx.font='10px ui-monospace';ctx.fillText('기준 이미지 구조: 투명 아크릴 케이스 · 검은 모터/웜 · 원형 회전판 · 프로파일 기둥 · 태양광 모듈',14,43);
 }
 
 function setup3dControls(){const c=$('rigCanvas');c.addEventListener('pointerdown',event=>{viewer.drag={x:event.clientX,y:event.clientY};c.setPointerCapture?.(event.pointerId);});c.addEventListener('pointermove',event=>{if(!viewer.drag)return;viewer.yaw+=(event.clientX-viewer.drag.x)*.012;viewer.pitch=clamp(viewer.pitch+(event.clientY-viewer.drag.y)*.009,-1.2,.45);viewer.drag={x:event.clientX,y:event.clientY};});['pointerup','pointercancel','pointerleave'].forEach(type=>c.addEventListener(type,()=>{viewer.drag=null;}));c.addEventListener('wheel',event=>{event.preventDefault();viewer.zoom=clamp(viewer.zoom-event.deltaY*.001,.62,1.85);},{passive:false});$('viewReset').addEventListener('click',()=>{viewer.yaw=.62;viewer.pitch=.28;viewer.zoom=.80;});}

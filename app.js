@@ -53,7 +53,7 @@ async function loadSuppliedCadMeshes() {
   renderAll();
 }
 
-const defaultSketch = `// 2축 태양광 추적 및 탄소 저감량 모니터링 시스템
+const archivedDefaultSketch = `// 2축 태양광 추적 및 탄소 저감량 모니터링 시스템
 // 아두이노 우노 1개 / NEMA17 스테퍼모터 2개 / 30:1 웜기어
 // CdS 광센서 4개 / LCD 2개 / INA219 전압·전류 센서
 
@@ -268,6 +268,256 @@ void showLcd2(String line1, String line2) {
   lcd2.print(line2 + "                ");
 }`;
 
+// Default Uno sketch: two independent NEMA17 + A4988/DRV8825 axes with
+// 30:1 worm reducers.  This is the code presented to users in the editor.
+// It avoids runToPosition()/delay(), so both motors are serviced together.
+const defaultSketch = `// 2축 태양광 추적 및 탄소 저감량 모니터링 시스템
+// Arduino Uno + NEMA17 2개 + A4988/DRV8825 2개 + 30:1 웜기어
+// CdS 센서 4개(A0~A3) / LCD 2개 / INA219(0x40)
+
+#include <Wire.h>
+#include <AccelStepper.h>
+#include <LiquidCrystal_I2C.h>
+#include <Adafruit_INA219.h>
+
+// I2C LCD: LCD1은 추적 전 발전량, LCD2는 추적 후/결과
+LiquidCrystal_I2C lcd1(0x26, 16, 2);
+LiquidCrystal_I2C lcd2(0x27, 16, 2);
+Adafruit_INA219 ina219;
+
+// A4988/DRV8825 STEP/DIR 연결
+// 수평축: D2 STEP, D3 DIR / 수직축: D4 STEP, D5 DIR / ENABLE: D8
+AccelStepper motorH(AccelStepper::DRIVER, 2, 3);
+AccelStepper motorV(AccelStepper::DRIVER, 4, 5);
+const int ENABLE_PIN = 8;
+
+// NEMA17 1.8°(200 step/rev), 1/8 microstep, 30:1 웜기어
+const float MOTOR_STEPS_PER_REV = 200;
+const float MICROSTEPS = 8;
+const float WORM_RATIO_H = 30;
+const float WORM_RATIO_V = 30;
+const float STEPS_PER_DEG_H = MOTOR_STEPS_PER_REV * MICROSTEPS * WORM_RATIO_H / 360.0;
+const float STEPS_PER_DEG_V = MOTOR_STEPS_PER_REV * MICROSTEPS * WORM_RATIO_V / 360.0;
+
+// 기구 안전 범위와 제어 보정값
+const int MIN_ANGLE = 20;
+const int MAX_ANGLE = 160;
+const int HOME_ANGLE = 90;
+const int LDR_TOLERANCE = 35;
+const int TRACK_STEP_DEG = 1;
+const int STABLE_READS_REQUIRED = 10;
+const int CONTROL_INTERVAL_MS = 100;
+const int MEASURE_SAMPLES = 50;       // 5초: 100 ms × 50
+const int STABILIZE_SAMPLES = 300;    // 30초: 100 ms × 300
+
+int targetH = HOME_ANGLE;
+int targetV = HOME_ANGLE;
+int errH = 0;
+int errV = 0;
+int phase = 0;       // 0 전측정 / 1 추적 / 2 안정화 / 3 후측정 / 4 결과
+int sampleCount = 0;
+int stableCount = 0;
+int page = 0;
+
+float sumP = 0;
+float sumV = 0;
+float sumI = 0;
+float beforeP = 0;
+float afterP = 0;
+float afterV = 0;
+float afterI = 0;
+float rate = 0;
+float energyWh = 0;
+
+unsigned long lastControlMs = 0;
+
+void setup() {
+  pinMode(ENABLE_PIN, OUTPUT);
+  digitalWrite(ENABLE_PIN, LOW);  // 대부분의 A4988/DRV8825는 LOW가 활성
+
+  motorH.setMaxSpeed(420);        // 웜기어 출력축 기준 약 3.1°/s
+  motorH.setAcceleration(260);
+  motorV.setMaxSpeed(320);        // 패널 하중을 고려해 수직축은 낮게 설정
+  motorV.setAcceleration(200);
+  setHorizontalTarget(HOME_ANGLE);
+  setVerticalTarget(HOME_ANGLE);
+
+  lcd1.init();
+  lcd1.backlight();
+  lcd2.init();
+  lcd2.backlight();
+  ina219.begin();
+
+  showLcd1("BEFORE TRACK", "MEASURING...");
+  showLcd2("AFTER TRACK", "WAIT...");
+}
+
+void loop() {
+  // 반드시 매 loop마다 호출: 두 축이 동시에 가감속하며 이동한다.
+  motorH.run();
+  motorV.run();
+
+  unsigned long now = millis();
+  if (now - lastControlMs < CONTROL_INTERVAL_MS) return;
+  lastControlMs = now;
+
+  float voltage = ina219.getBusVoltage_V();
+  float current = ina219.getCurrent_mA() / 1000.0;
+  if (current < 0) current = 0;
+  float power = voltage * current;
+
+  // 100 ms 단위 누적 발전량(Wh)
+  energyWh = energyWh + power * CONTROL_INTERVAL_MS / 3600000.0;
+
+  if (phase == 0) {
+    measureBefore(power);
+  }
+  else if (phase == 1) {
+    runTracking();
+  }
+  else if (phase == 2) {
+    waitForStabilization();
+  }
+  else if (phase == 3) {
+    measureAfter(voltage, current, power);
+  }
+  else {
+    showResultPages();
+  }
+}
+
+void runTracking() {
+  bool aligned = readLightSensorsAndSetTargets();
+  showLcd2("TRACKING", "H:" + String(errH) + " V:" + String(errV));
+
+  if (aligned && motorH.distanceToGo() == 0 && motorV.distanceToGo() == 0) {
+    stableCount++;
+  } else {
+    stableCount = 0;
+  }
+
+  if (stableCount >= STABLE_READS_REQUIRED) {
+    phase = 2;
+    sampleCount = 0;
+    showLcd2("TRACK COMPLETE", "WAIT 30 SEC");
+  }
+}
+
+// A0 좌상, A1 우상, A2 좌하, A3 우하.  목표각은 한 번에 1°만 수정한다.
+bool readLightSensorsAndSetTargets() {
+  int tl = analogRead(A0);
+  int tr = analogRead(A1);
+  int bl = analogRead(A2);
+  int br = analogRead(A3);
+
+  errH = (tl + bl) / 2 - (tr + br) / 2;
+  errV = (tl + tr) / 2 - (bl + br) / 2;
+
+  bool hAligned = abs(errH) <= LDR_TOLERANCE;
+  bool vAligned = abs(errV) <= LDR_TOLERANCE;
+
+  if (!hAligned && motorH.distanceToGo() == 0) {
+    if (errH > 0) setHorizontalTarget(targetH - TRACK_STEP_DEG);
+    else setHorizontalTarget(targetH + TRACK_STEP_DEG);
+  }
+  if (!vAligned && motorV.distanceToGo() == 0) {
+    if (errV > 0) setVerticalTarget(targetV + TRACK_STEP_DEG);
+    else setVerticalTarget(targetV - TRACK_STEP_DEG);
+  }
+  return hAligned && vAligned;
+}
+
+// 웜기어 출력축 각도 → 모터 microstep 위치.  90°를 기계 원점으로 사용한다.
+void setHorizontalTarget(int degree) {
+  targetH = constrain(degree, MIN_ANGLE, MAX_ANGLE);
+  motorH.moveTo((targetH - HOME_ANGLE) * STEPS_PER_DEG_H);
+}
+
+void setVerticalTarget(int degree) {
+  targetV = constrain(degree, MIN_ANGLE, MAX_ANGLE);
+  motorV.moveTo((targetV - HOME_ANGLE) * STEPS_PER_DEG_V);
+}
+
+void measureBefore(float power) {
+  sumP = sumP + power;
+  sampleCount++;
+  if (sampleCount >= MEASURE_SAMPLES) {
+    beforeP = sumP / sampleCount;
+    showLcd1("BEFORE TRACK", "P:" + String(beforeP, 2) + "W");
+    sumP = 0;
+    sampleCount = 0;
+    phase = 1;
+  }
+}
+
+void waitForStabilization() {
+  // 안정화 중 광량 변화가 감지되면 다시 추적한다.
+  int oldH = errH;
+  int oldV = errV;
+  bool aligned = readLightSensorsAndSetTargets();
+  if (!aligned || abs(oldH - errH) > LDR_TOLERANCE || abs(oldV - errV) > LDR_TOLERANCE) {
+    phase = 1;
+    stableCount = 0;
+    sampleCount = 0;
+    return;
+  }
+
+  sampleCount++;
+  if (sampleCount >= STABILIZE_SAMPLES) {
+    sampleCount = 0;
+    phase = 3;
+    showLcd2("AFTER MEASURE", "MEASURING...");
+  }
+}
+
+void measureAfter(float voltage, float current, float power) {
+  sumP = sumP + power;
+  sumV = sumV + voltage;
+  sumI = sumI + current;
+  sampleCount++;
+  if (sampleCount >= MEASURE_SAMPLES) {
+    afterP = sumP / sampleCount;
+    afterV = sumV / sampleCount;
+    afterI = sumI / sampleCount;
+    rate = beforeP > 0.01 ? (afterP - beforeP) * 100.0 / beforeP : 0;
+    showLcd2("AFTER TRACK", "P:" + String(afterP, 2) + "W");
+    sumP = 0;
+    sumV = 0;
+    sumI = 0;
+    sampleCount = 0;
+    page = 0;
+    phase = 4;
+  }
+}
+
+void showResultPages() {
+  sampleCount++;
+  if (sampleCount < 30) return;    // 3초마다 LCD2 페이지 전환
+  sampleCount = 0;
+
+  if (page == 0) showLcd2("AFTER POWER", String(afterP, 2) + "W " + String(rate, 1) + "%");
+  if (page == 1) showLcd2("VOLT / CURRENT", String(afterV, 2) + "V " + String(afterI, 2) + "A");
+  if (page == 2) showLcd2("ENERGY", String(energyWh, 3) + "Wh");
+  if (page == 3) showLcd2("CO2 REDUCTION", String(energyWh * 0.4541, 3) + "g");
+
+  page++;
+  if (page > 3) page = 0;
+}
+
+void showLcd1(String line1, String line2) {
+  lcd1.setCursor(0, 0);
+  lcd1.print(line1 + "                ");
+  lcd1.setCursor(0, 1);
+  lcd1.print(line2 + "                ");
+}
+
+void showLcd2(String line1, String line2) {
+  lcd2.setCursor(0, 0);
+  lcd2.print(line1 + "                ");
+  lcd2.setCursor(0, 1);
+  lcd2.print(line2 + "                ");
+}`;
+
 const state = { running:false, compiled:null, scope:{}, loopDelay:.18, nextLoop:0, h:90, v:90,
   pins:{A0:0,A1:0,A2:0,A3:0}, ldr:{left:0,right:0,top:0,bottom:0}, power:0, voltage:0, current:0,
   energy:0, co2Kg:0, elapsed:0, lastFrame:null, servos:{}, pinServos:{}, steppers:{}, lcds:{}, auto:null, serial:[],
@@ -336,7 +586,7 @@ function esc(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 function serialPrint(message){state.serial.push({time:state.elapsed,text:String(message)});if(state.serial.length>300)state.serial.shift();renderSerial();}
 function renderSerial(){$('serialLog').innerHTML=state.serial.map(l=>`<div><time>${l.time.toFixed(2).padStart(6,'0')}s</time>${esc(l.text)}</div>`).join('');$('serialLog').scrollTop=$('serialLog').scrollHeight;}
 function makeServo(name){return {name,pin:null,angle:90,attach(pin){this.pin=+pin;state.servos[name]=this;state.pinServos[this.pin]=this;serialPrint(`${name}.attach(D${pin})`);},write(angle){const next=clamp(Math.round(+angle||0),20,160),nextH=this.pin===9?next:state.h,nextV=this.pin===10?next:state.v,collision=getCollisionState(nextH,nextV);if(!collision.safe){const key=`${this.pin}:${nextH}:${nextV}`;if(state.lastCollisionKey!==key){state.lastCollisionKey=key;serialPrint(`COLLISION BLOCKED: D${this.pin} → ${next}°`);}state.collision=collision;return false;}state.lastCollisionKey='';this.angle=next;if(this.pin===9)state.h=this.angle;if(this.pin===10)state.v=this.angle;state.collision=collision;return true;},read(){return this.angle;}};}
-function makeStepper(name,stepPin,dirPin){const horizontal=/h$/i.test(name)||/horizontal/i.test(name),stepsPerDegree=133.333;const axis=horizontal?'H':'V';const stepper={name,stepPin:+stepPin,dirPin:+dirPin,position:0,target:0,maxSpeed:800,acceleration:500,setMaxSpeed(value){this.maxSpeed=+value||this.maxSpeed;},setAcceleration(value){this.acceleration=+value||this.acceleration;},moveTo(steps){this.target=+steps||0;},currentPosition(){return this.position;},run(){return this.runToPosition();},runToPosition(){const requested=clamp(Math.round(90+this.target/stepsPerDegree),20,160),nextH=horizontal?requested:state.h,nextV=horizontal?state.v:requested,collision=getCollisionState(nextH,nextV);if(!collision.safe){const key=`stepper-${axis}:${nextH}:${nextV}`;if(state.lastCollisionKey!==key){state.lastCollisionKey=key;serialPrint(`COLLISION BLOCKED: NEMA17-${axis} → ${requested}°`);}state.collision=collision;return false;}state.lastCollisionKey='';this.position=this.target;if(horizontal)state.h=requested;else state.v=requested;state.collision=collision;return true;}};state.steppers[name]=stepper;serialPrint(`${name}: NEMA17 STEP D${stepPin} / DIR D${dirPin}`);return stepper;}
+function makeStepper(name,stepPin,dirPin){const horizontal=/h$/i.test(name)||/horizontal/i.test(name),stepsPerDegree=133.333;const axis=horizontal?'H':'V';const stepper={name,stepPin:+stepPin,dirPin:+dirPin,position:0,target:0,maxSpeed:800,acceleration:500,setMaxSpeed(value){this.maxSpeed=+value||this.maxSpeed;},setAcceleration(value){this.acceleration=+value||this.acceleration;},moveTo(steps){this.target=+steps||0;},currentPosition(){return this.position;},distanceToGo(){return this.target-this.position;},setCurrentPosition(steps){this.position=+steps||0;this.target=this.position;},run(){return this.runToPosition();},runToPosition(){const requested=clamp(Math.round(90+this.target/stepsPerDegree),20,160),nextH=horizontal?requested:state.h,nextV=horizontal?state.v:requested,collision=getCollisionState(nextH,nextV);if(!collision.safe){const key=`stepper-${axis}:${nextH}:${nextV}`;if(state.lastCollisionKey!==key){state.lastCollisionKey=key;serialPrint(`COLLISION BLOCKED: NEMA17-${axis} → ${requested}°`);}state.collision=collision;return false;}state.lastCollisionKey='';this.position=this.target;if(horizontal)state.h=requested;else state.v=requested;state.collision=collision;return true;}};state.steppers[name]=stepper;serialPrint(`${name}: NEMA17 STEP D${stepPin} / DIR D${dirPin}`);return stepper;}
 function makeLcd(address){const key=address===0x26?'26':address===0x27?'27':String(address);const lcd={address,col:0,row:0,lines:['                ','                '],batch:false,lastLogged:'',init(){state.lcds[key]=this;},begin(){state.lcds[key]=this;},backlight(){},notify(){if(this.batch)return;const content=this.lines.join(' / ');if(content!==this.lastLogged){this.lastLogged=content;serialPrint(`[LCD 0x${this.address.toString(16).toUpperCase()}] ${this.lines[0].trim()} / ${this.lines[1].trim()}`);}},clear(){this.lines=['                ','                '];this.col=0;this.row=0;this.notify();},setCursor(col,row){this.col=clamp(Math.floor(+col||0),0,15);this.row=clamp(Math.floor(+row||0),0,1);},print(value,precision){let text;if(typeof value==='number'){text=Number.isInteger(precision)&&precision>=0?value.toFixed(precision):String(+value.toFixed(2));}else{text=String(value);}let line=this.lines[this.row];for(const char of text){if(this.col>=16)break;line=line.slice(0,this.col)+char+line.slice(this.col+1);this.col++;}this.lines[this.row]=line;this.notify();},println(value,precision){this.print(value,precision);this.row=1;this.col=0;}};state.lcds[key]=lcd;return lcd;}
 // Optional INA219 current/power monitor on the same virtual I²C bus (A4/A5).
 // Values are derived from the physical panel model, just as the real sensor would observe them.
@@ -384,16 +634,16 @@ function compileSketch(){try{const source=$('codeEditor').value;if(!/void\s+setu
   globals.replace(/\bAccelStepper\s+([A-Za-z_]\w*)\s*\(\s*AccelStepper::DRIVER\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\s*;/g,(_,name,stepPin,dirPin)=>{state.scope[name]=makeStepper(name,stepPin,dirPin);return '';});
   globals.replace(/\bServo\s+([A-Za-z_]\w*)\s*;/g,(_,name)=>{state.scope[name]=makeServo(name);return '';});
   globals.replace(/\bLiquidCrystal_I2C\s+([A-Za-z_]\w*)\s*\(\s*(0x[\da-fA-F]+|\d+)[^)]*\)\s*;/g,(_,name,address)=>{state.scope[name]=makeLcd(Number(address));return '';});
-  globals.replace(/\b(?:const\s+)?(?:unsigned\s+long|int|float|double|long|bool|boolean)\s+([^;]+);/g,(_,declarations)=>{declarations.split(',').forEach(declaration=>{const match=/^\s*([A-Za-z_]\w*)\s*(?:=\s*(.+))?\s*$/.exec(declaration);if(!match)return;const[,name,raw]=match;state.scope[name]=raw?Number(Function(`return (${raw})`)()):0;});return '';});
+  globals.replace(/\b(?:const\s+)?(?:unsigned\s+long|int|float|double|long|bool|boolean)\s+([^;]+);/g,(_,declarations)=>{declarations.split(',').forEach(declaration=>{const match=/^\s*([A-Za-z_]\w*)\s*(?:=\s*(.+))?\s*$/.exec(declaration);if(!match)return;const[,name,raw]=match;state.scope[name]=raw?Number(Function('scope',`with(scope){return (${raw})}`)(state.scope)):0;});return '';});
   const api={A0,A1,A2,A3,A4,A5,HIGH:1,LOW:0,Math,String:arduinoString,analogRead:pin=>state.pins[`A${pin}`]??0,constrain:(n,lo,hi)=>clamp(+n,+lo,+hi),abs:Math.abs,min:Math.min,max:Math.max,round:Math.round,map:(x,a,b,c,d)=>(x-a)*(d-c)/(b-a)+c,delay:ms=>{state.loopDelay=Math.max(.01,(+ms||0)/1000);},millis:()=>Math.round(state.elapsed*1000),readPower:()=>state.power,readVoltage:()=>state.voltage,readCurrent:()=>state.current,readEnergyWh:()=>state.energy,readCO2Grams:()=>state.co2Kg*1000,setSystemState:value=>{state.systemState=String(value);},setBeforePower:value=>{state.beforePower=+value;},setAfterPower:value=>{state.afterPower=+value;},setPowerComparison:(before,after)=>{state.beforePower=+before;state.afterPower=+after;state.increaseRate=before?((after-before)/before)*100:0;},beginAutoTracking,runAutoTracking,Serial:{begin(){},print:serialPrint,println:serialPrint},pinMode(){},digitalWrite(){}};
   Object.assign(state.scope,api);const functionSource=functions.map(fn=>`function ${fn.name}(${jsParams(fn.params)}){${transform(fn.body)}}`).join('\n');state.compiled=new Function('scope',`with(scope){${functionSource}\nreturn {setup,loop};}`)(state.scope);state.loopDelay=.18;state.compiled.setup();state.compiled.loop();renderAll();setMessage('컴파일 성공 — setup()과 사용자 함수를 준비했습니다.','ok');return true;
 }catch(error){state.running=false;setMessage(`컴파일 오류: ${error.message}`,'error');serialPrint(`ERROR: ${error.message}`);return false;}}
-function runLoop(){if(!state.compiled){if(!compileSketch())return;}try{state.loopDelay=.18;state.compiled.loop();}catch(error){state.running=false;setMessage(`실행 오류: ${error.message}`,'error');serialPrint(`RUNTIME ERROR: ${error.message}`);}}
+function runLoop(){if(!state.compiled){if(!compileSketch())return;}try{state.loopDelay=.02;state.compiled.loop();}catch(error){state.running=false;setMessage(`실행 오류: ${error.message}`,'error');serialPrint(`RUNTIME ERROR: ${error.message}`);}}
 function resetBoard(){state.running=false;state.compiled=null;state.scope={};state.h=90;state.v=90;state.energy=0;state.co2Kg=0;state.elapsed=0;state.loopDelay=.18;state.nextLoop=0;state.servos={};state.pinServos={};state.steppers={};state.lcds={};state.auto=null;state.systemState='IDLE';state.beforePower=null;state.afterPower=null;state.increaseRate=null;state.serial=[];serialPrint('Board reset: NEMA17-H/V → 90°, LCD buffers cleared');setMessage('보드를 초기화했습니다. 컴파일·적용을 눌러 새 코드를 실행하세요.');updateEnvironment();renderAll();}
 function lcdText(key){return state.lcds[key]?state.lcds[key].lines:['                ','                '];}
-function syncGraduationSketchTelemetry(){const s=state.scope;if(!Number.isFinite(+s.step))return;const steps=['BEFORE MEASURE','TRACKING','STABILIZING','AFTER MEASURE','RESULT'];state.systemState=steps[clamp(Math.floor(+s.step||0),0,4)];if(+s.step>=1&&Number.isFinite(+s.beforeP))state.beforePower=+s.beforeP;if(+s.step>=4&&Number.isFinite(+s.afterP)){state.afterPower=+s.afterP;state.increaseRate=Number.isFinite(+s.rate)?+s.rate:null;}}
+function syncGraduationSketchTelemetry(){const s=state.scope,phase=Number.isFinite(+s.phase)?+s.phase:+s.step;if(!Number.isFinite(phase))return;const steps=['BEFORE MEASURE','TRACKING','STABILIZING','AFTER MEASURE','RESULT'];state.systemState=steps[clamp(Math.floor(phase||0),0,4)];if(phase>=1&&Number.isFinite(+s.beforeP))state.beforePower=+s.beforeP;if(phase>=4&&Number.isFinite(+s.afterP)){state.afterPower=+s.afterP;state.increaseRate=Number.isFinite(+s.rate)?+s.rate:null;}}
 function setVerificationStatus(id,status,text){const item=$(id);item.textContent=text;item.className=status;}
-function updateDesignVerification(){syncGraduationSketchTelemetry();const voltage=state.voltage,current=state.current,power=state.power,calculated=voltage*current,delta=Math.abs(calculated-power),factor=env().co2Factor,carbonG=state.energy*factor,drive=updateTorqueSimulation(),collision=updateCollisionSimulation();const compiled=!!state.compiled,hMotor=state.steppers.motorH,vMotor=state.steppers.motorV,servoReady=!!hMotor&&!!vMotor&&hMotor!==vMotor&&drive.safe,collisionSafe=collision.safe;const ldrReady=compiled&&/analogRead\s*\(\s*A[0-3]\s*\)/.test($('codeEditor').value);const lcdReady=!!state.lcds['26']&&!!state.lcds['27']&&state.lcds['26']!==state.lcds['27'];const mathReady=delta<.0001&&state.energy>=0&&Number.isFinite(carbonG);$('verifyPowerFormula').textContent=`${voltage.toFixed(2)} V × ${current.toFixed(3)} A = ${calculated.toFixed(3)} W`;$('verifyPowerDelta').textContent=`INA219 모델 전력 ${power.toFixed(3)} W · 오차 ${delta.toFixed(5)} W`;$('verifyCarbonFormula').textContent=`${state.energy.toFixed(3)} Wh × ${factor.toFixed(4)} g/Wh = ${carbonG.toFixed(3)} g`;setVerificationStatus('verifyServo',servoReady?'pass':compiled?'fail':'wait',servoReady?'PASS · STEP/DIR D2–D5':'대기');setVerificationStatus('verifyCollision',collisionSafe?'pass':'fail',collisionSafe?'PASS · 간섭 없음':'충돌 감지');setVerificationStatus('verifyLdr',ldrReady?'pass':compiled?'fail':'wait',ldrReady?'PASS · A0–A3':'대기');setVerificationStatus('verifyLcd',lcdReady?'pass':compiled?'fail':'wait',lcdReady?'PASS · 0x26/0x27':'대기');setVerificationStatus('verifyMath',mathReady?'pass':'fail',mathReady?'PASS · P=V×I':'오차 확인');const s=state.scope;const stepInfo=Number.isFinite(+s.step)?`step ${s.step} · count ${s.count||0} · H ${s.errH??'—'} · V ${s.errV??'—'}`:'코드 적용 전';$('verifyEvidence').textContent=compiled?`${stepInfo} · NEMA17-H ${state.h}° · NEMA17-V ${state.v}° · 30:1 worm · ${collisionSafe?'clear':'collision'}`:'코드를 컴파일·적용하면 NEMA17-H/V, LCD, 전력 산정 및 기구 간섭을 검사합니다.';return {compiled,servoReady,collisionSafe,ldrReady,lcdReady,mathReady};}
+function updateDesignVerification(){syncGraduationSketchTelemetry();const voltage=state.voltage,current=state.current,power=state.power,calculated=voltage*current,delta=Math.abs(calculated-power),factor=env().co2Factor,carbonG=state.energy*factor,drive=updateTorqueSimulation(),collision=updateCollisionSimulation();const compiled=!!state.compiled,hMotor=state.steppers.motorH,vMotor=state.steppers.motorV,servoReady=!!hMotor&&!!vMotor&&hMotor!==vMotor&&drive.safe,collisionSafe=collision.safe;const ldrReady=compiled&&/analogRead\s*\(\s*A[0-3]\s*\)/.test($('codeEditor').value);const lcdReady=!!state.lcds['26']&&!!state.lcds['27']&&state.lcds['26']!==state.lcds['27'];const mathReady=delta<.0001&&state.energy>=0&&Number.isFinite(carbonG);$('verifyPowerFormula').textContent=`${voltage.toFixed(2)} V × ${current.toFixed(3)} A = ${calculated.toFixed(3)} W`;$('verifyPowerDelta').textContent=`INA219 모델 전력 ${power.toFixed(3)} W · 오차 ${delta.toFixed(5)} W`;$('verifyCarbonFormula').textContent=`${state.energy.toFixed(3)} Wh × ${factor.toFixed(4)} g/Wh = ${carbonG.toFixed(3)} g`;setVerificationStatus('verifyServo',servoReady?'pass':compiled?'fail':'wait',servoReady?'PASS · STEP/DIR D2–D5':'대기');setVerificationStatus('verifyCollision',collisionSafe?'pass':'fail',collisionSafe?'PASS · 간섭 없음':'충돌 감지');setVerificationStatus('verifyLdr',ldrReady?'pass':compiled?'fail':'wait',ldrReady?'PASS · A0–A3':'대기');setVerificationStatus('verifyLcd',lcdReady?'pass':compiled?'fail':'wait',lcdReady?'PASS · 0x26/0x27':'대기');setVerificationStatus('verifyMath',mathReady?'pass':'fail',mathReady?'PASS · P=V×I':'오차 확인');const s=state.scope,phase=Number.isFinite(+s.phase)?s.phase:s.step,count=s.sampleCount??s.count;const stepInfo=Number.isFinite(+phase)?`phase ${phase} · count ${count||0} · H ${s.errH??'—'} · V ${s.errV??'—'}`:'코드 적용 전';$('verifyEvidence').textContent=compiled?`${stepInfo} · NEMA17-H ${state.h}° · NEMA17-V ${state.v}° · 30:1 worm · ${collisionSafe?'clear':'collision'}`:'코드를 컴파일·적용하면 NEMA17-H/V, LCD, 전력 산정 및 기구 간섭을 검사합니다.';return {compiled,servoReady,collisionSafe,ldrReady,lcdReady,mathReady};}
 function runDesignVerification(){const result=updateDesignVerification(),passed=[result.servoReady,result.collisionSafe,result.ldrReady,result.lcdReady,result.mathReady].filter(Boolean).length;const report=$('verificationResult');if(!result.compiled){report.className='verification-result wait';report.textContent='검증 대기: 먼저 기본 코드를 컴파일·적용한 뒤 실행하세요.';return;}report.className=passed===5?'verification-result pass':'verification-result wait';report.textContent=`검증 완료 · ${passed}/5 PASS · ${state.systemState} · ${state.elapsed.toFixed(1)} s · 전력/에너지/CO₂, D9·D10·LCD 및 기구 간섭을 현재 값으로 대조했습니다.`;serialPrint(`Design verification: ${passed}/5 PASS`);}
 function renderAll(){syncGraduationSketchTelemetry();const p=state.pins,l=state.ldr;$('a0').textContent=String(p.A0).padStart(4,'0');$('a1').textContent=String(p.A1).padStart(4,'0');$('a2').textContent=String(p.A2).padStart(4,'0');$('a3').textContent=String(p.A3).padStart(4,'0');$('leftAvg').textContent=l.left.toFixed(1);$('rightAvg').textContent=l.right.toFixed(1);$('topAvg').textContent=l.top.toFixed(1);$('bottomAvg').textContent=l.bottom.toFixed(1);$('hError').textContent=(l.right-l.left).toFixed(1);$('vError').textContent=(l.top-l.bottom).toFixed(1);$('hAngle').textContent=`${state.h}°`;$('vAngle').textContent=`${state.v}°`;$('power').textContent=`${state.power.toFixed(2)} W`;$('incidence').textContent=`${state.incidenceAngle.toFixed(1)}°`;$('voltage').textContent=`${state.voltage.toFixed(2)} V`;$('current').textContent=`${state.current.toFixed(2)} A`;$('energy').textContent=`${state.energy.toFixed(3)} Wh`;$('lcd26').innerHTML=lcdText('26').map(x=>`<span>${esc(x)}</span>`).join('');$('lcd27').innerHTML=lcdText('27').map(x=>`<span>${esc(x)}</span>`).join('');$('runChip').textContent=state.running?(state.auto?.phase||'RUNNING'):'STOPPED';$('runChip').classList.toggle('running',state.running);$('runBtn').textContent=state.auto?.phase==='FINAL'?'↻ 새 측정':state.running?'Ⅱ 일시정지':'▶ 실행';updateDesignVerification();drawRig();}
 function drawRig(){const c=$('rigCanvas'),x=c.getContext('2d'),w=c.width,h=c.height,e=env();x.clearRect(0,0,w,h);const lx=w*(.54+(e.az-90)/360),ly=71+(160-e.el)*.42,g=x.createRadialGradient(lx,ly,5,lx,ly,100);g.addColorStop(0,'rgba(255,225,112,.95)');g.addColorStop(.22,'rgba(255,190,72,.28)');g.addColorStop(1,'rgba(255,190,72,0)');x.fillStyle=g;x.beginPath();x.arc(lx,ly,100,0,Math.PI*2);x.fill();x.fillStyle='#ffe89c';x.beginPath();x.arc(lx,ly,17,0,Math.PI*2);x.fill();const bx=w*.5,by=h*.81;x.strokeStyle='#396772';x.lineWidth=16;x.beginPath();x.moveTo(bx,by);x.lineTo(bx,by-105);x.stroke();x.fillStyle='#163f4a';x.beginPath();x.ellipse(bx,by,160,34,0,0,Math.PI*2);x.fill();const rot=(state.h-90)*Math.PI/180,tilt=(state.v-90)*Math.PI/180;x.save();x.translate(bx,by-120);x.rotate(rot*.18);x.transform(1,Math.sin(tilt)*.32,0,Math.max(.42,Math.cos(tilt)*.72),0,0);x.fillStyle='#12385d';x.strokeStyle='#65d1dd';x.lineWidth=4;x.fillRect(-180,-88,360,176);x.strokeRect(-180,-88,360,176);x.strokeStyle='#3c819d';x.lineWidth=1;for(let a=-144;a<180;a+=36){x.beginPath();x.moveTo(a,-88);x.lineTo(a,88);x.stroke()}for(let b=-59;b<88;b+=30){x.beginPath();x.moveTo(-180,b);x.lineTo(180,b);x.stroke()}x.fillStyle='#071820';x.fillRect(-40,-40,80,80);x.strokeStyle='#66efe2';x.lineWidth=2;x.strokeRect(-40,-40,80,80);x.beginPath();x.moveTo(0,-40);x.lineTo(0,40);x.moveTo(-40,0);x.lineTo(40,0);x.stroke();[[-20,-20],[20,-20],[-20,20],[20,20]].forEach(([a,b])=>{x.fillStyle='#e2fa8b';x.beginPath();x.arc(a,b,5,0,Math.PI*2);x.fill()});x.restore();x.fillStyle='#a2c6ca';x.font='12px ui-monospace';x.fillText(`LIGHT ${e.az}° / ${e.el}°`,lx+24,ly+4);x.fillText(`D9 = ${state.h}°`,bx-220,by-14);x.fillText(`D10 = ${state.v}°`,bx+118,by-90);}

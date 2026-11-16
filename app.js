@@ -5,6 +5,54 @@ const $ = id => document.getElementById(id);
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const A0 = 0, A1 = 1, A2 = 2, A3 = 3, A4 = 4, A5 = 5;
 
+// -----------------------------------------------------------------------------
+// Supplied CAD meshes
+// These are the actual binary STL files included in the project's CAD archive:
+// 30:1 worm/wheel, 155 mm turntable bearing, NEMA17 motor, and its bracket.
+// They are kept separate so D9/D10 can move the appropriate physical group;
+// no independent animation is applied to these parts.
+const suppliedCadMeshes = Object.create(null);
+const suppliedCadManifest = {
+  bearingLower: ['assets/supplied-cad/turntable-lower-155.stl', 7],
+  bearingUpper: ['assets/supplied-cad/turntable-upper-155.stl', 7],
+  wormWheel: ['assets/supplied-cad/wheel-6mm.stl', 140],
+  worm: ['assets/supplied-cad/worm-6mm.stl', 16],
+  nema17: ['assets/supplied-cad/nema17-motor.stl', 3],
+  nemaBracket: ['assets/supplied-cad/nema17-bracket.stl', 3]
+};
+
+function parseSuppliedBinaryStl(buffer, stride = 1) {
+  const view = new DataView(buffer);
+  const count = view.getUint32(80, true);
+  if (84 + count * 50 !== buffer.byteLength) throw new Error('Invalid binary STL');
+  const triangles = [], min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < count; i += stride) {
+    const tri = [];
+    for (let vertex = 0; vertex < 3; vertex++) {
+      const start = 84 + i * 50 + 12 + vertex * 12;
+      const point = [view.getFloat32(start, true), view.getFloat32(start + 4, true), view.getFloat32(start + 8, true)];
+      point.forEach((value, axis) => { min[axis] = Math.min(min[axis], value); max[axis] = Math.max(max[axis], value); });
+      tri.push(point);
+    }
+    triangles.push(tri);
+  }
+  const center = min.map((value, axis) => (value + max[axis]) / 2);
+  return { triangles, center, span: Math.max(...max.map((value, axis) => value - min[axis])) };
+}
+
+async function loadSuppliedCadMeshes() {
+  await Promise.all(Object.entries(suppliedCadManifest).map(async ([name, [url, stride]]) => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(response.statusText);
+      suppliedCadMeshes[name] = parseSuppliedBinaryStl(await response.arrayBuffer(), stride);
+    } catch (error) {
+      console.warn(`Could not load supplied CAD mesh: ${name}`, error);
+    }
+  }));
+  renderAll();
+}
+
 const defaultSketch = `// 2축 태양광 추적 및 탄소 저감량 모니터링 시스템
 // 아두이노 우노 1개 / NEMA17 스테퍼모터 2개 / 30:1 웜기어
 // CdS 광센서 4개 / LCD 2개 / INA219 전압·전류 센서
@@ -440,6 +488,17 @@ function drawRig(){
   const project=point=>{const q=camera(point),s=viewer.zoom*720/(720+q[2]);return {x:w*.5+q[0]*s,y:h*.79-q[1]*s,z:q[2],s};};
   const poly=(points,fill,stroke='#496a70')=>{const p=points.map(project);ctx.fillStyle=fill;ctx.strokeStyle=stroke;ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(p[0].x,p[0].y);p.slice(1).forEach(q=>ctx.lineTo(q.x,q.y));ctx.closePath();ctx.fill();ctx.stroke();};
   const line=(a,b,color,width=2,dash=[])=>{const p=project(a),q=project(b);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.setLineDash(dash);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();ctx.setLineDash([]);};
+  // Draw a decimated, supplied binary-STL mesh.  The source CAD is retained
+  // exactly as supplied; decimation only keeps the in-browser animation fast.
+  const drawSuppliedMesh=(name,anchor,size,transform=point=>point,fill='#52686c',stroke='#a8bab9',axisMap=point=>[point[0],point[2],point[1]])=>{
+    const mesh=suppliedCadMeshes[name]; if(!mesh)return false;
+    const faces=mesh.triangles.map(triangle=>{
+      const points=triangle.map(vertex=>{const raw=axisMap(vertex.map((value,axis)=>(value-mesh.center[axis])/mesh.span*size));return transform([anchor[0]+raw[0],anchor[1]+raw[1],anchor[2]+raw[2]]);});
+      return {points,depth:points.reduce((total,point)=>total+camera(point)[2],0)/3};
+    });
+    faces.sort((a,b)=>b.depth-a.depth).forEach(face=>poly(face.points,fill,stroke));
+    return true;
+  };
   const box=(center,size,top,side,transform=point=>point)=>{const [x,y,z]=center,[a,b,c]=size.map(v=>v/2),v=[[x-a,y-b,z-c],[x+a,y-b,z-c],[x+a,y+b,z-c],[x-a,y+b,z-c],[x-a,y-b,z+c],[x+a,y-b,z+c],[x+a,y+b,z+c],[x-a,y+b,z+c]].map(transform);[[0,1,2,3],[1,5,6,2],[5,4,7,6],[4,0,3,7],[3,2,6,7]].forEach((face,index)=>poly(face.map(i=>v[i]),index===4?top:side));};
   const disk=(center,r,fill,stroke)=>{const q=[];for(let i=0;i<32;i++){const a=i*Math.PI*2/32;q.push([center[0]+Math.cos(a)*r,center[1],center[2]+Math.sin(a)*r]);}poly(q,fill,stroke);};
   const az=point=>rotateAzimuth(point,state.h),panel=point=>panelWorldPoint(point,state.h,state.v);
@@ -460,21 +519,28 @@ function drawRig(){
   line(cube[4],cube[5],'#e6ffff',2);line(cube[5],cube[6],'#e6ffff',2);line(cube[6],cube[7],'#e6ffff',2);line(cube[7],cube[4],'#e6ffff',2);
   box([0,108,0],[216,5,216],'rgba(225,250,250,.28)','rgba(155,200,204,.18)');
   box([-52,25,-108],[66,34,5],'#111719','#05080a');box([52,25,-108],[66,34,5],'#111719','#05080a');
-  disk([0,113,0],72,'#e8eeee','#a6b8b9');disk([0,117,0],58,'#1a2225','#9ab0b0');
+  if(!drawSuppliedMesh('bearingLower',[0,112,0],155,point=>point,'#7e9193','#d9eeee'))disk([0,113,0],72,'#e8eeee','#a6b8b9');
+  if(!drawSuppliedMesh('bearingUpper',[0,112,0],155,az,'#b7c9c9','#ecffff'))disk([0,117,0],58,'#1a2225','#9ab0b0');
   // All moving parts above the transparent cover use D9 azimuth.
-  horizontalGear([0,120,0],54);disk(az([0,124,0]),46,'#eff4f3','#a9bbbb');
+  if(!drawSuppliedMesh('wormWheel',[0,124,0],112,az,'#303c40','#c6d4d4'))horizontalGear([0,120,0],54);
+  disk(az([0,124,0]),46,'#eff4f3','#a9bbbb');
   // Two central aluminium profiles and the black motor blocks inside the case.
   [[-28,0],[28,0],[-28,34],[28,34]].forEach(([x,z])=>{box([x,166,z],[18,88,18],'#edf2f1','#7e9294',az);[-5,0,5].forEach(dx=>line(az([x+dx,122,z-10]),az([x+dx,210,z-10]),'#526d72',.75));});
-  box([-58,157,-24],[54,44,48],'#111719','#030507',az);box([57,169,-26],[50,44,48],'#111719','#030507',az);
+  if(!drawSuppliedMesh('nemaBracket',[-58,152,-24],58,az,'#d0dbda','#f2ffff'))box([-58,157,-24],[54,44,48],'#111719','#030507',az);
+  if(!drawSuppliedMesh('nema17',[-58,157,-24],58,az,'#151d20','#91a6a8'))box([-58,157,-24],[54,44,48],'#111719','#030507',az);
+  if(!drawSuppliedMesh('nemaBracket',[57,164,-26],54,az,'#d0dbda','#f2ffff'))box([57,169,-26],[50,44,48],'#111719','#030507',az);
+  if(!drawSuppliedMesh('nema17',[57,169,-26],54,az,'#151d20','#91a6a8'))box([57,169,-26],[50,44,48],'#111719','#030507',az);
   // Visible black horizontal worm at the upper turntable rim.
-  verticalGear([73,139,-52],25,az);worm([73,139,-102],[73,139,-76],az,Math.round(state.h/8));box([73,139,-116],[34,32,18],'#222a2e','#0c1113',az);
+  if(!drawSuppliedMesh('wormWheel',[73,139,-52],48,az,'#253136','#a8b8b7'))verticalGear([73,139,-52],25,az);
+  if(!drawSuppliedMesh('worm',[73,139,-89],48,az,'#b7a35d','#e3d486',point=>[point[0],point[1],point[2]]))worm([73,139,-102],[73,139,-76],az,Math.round(state.h/8));
+  box([73,139,-116],[34,32,18],'#222a2e','#0c1113',az);
   // Elevation hinge housing and two support arms. They remain attached to D9.
   box([-5,212,-18],[98,22,58],'#dce5e4','#6e8588',az);
   disk(az([0,223,-25]),24,'#313c3f','#b5c7c6');
   // Black elevation worm / wheel at the right hinge, as exposed in the
   // supplied reference rendering. It follows D10 but remains on the D9 frame.
-  verticalGear([65,223,-48],27,az);
-  worm([65,223,-103],[65,223,-76],az,Math.round(state.v/8));
+  if(!drawSuppliedMesh('wormWheel',[65,223,-48],52,az,'#253136','#a8b8b7'))verticalGear([65,223,-48],27,az);
+  if(!drawSuppliedMesh('worm',[65,223,-89],52,az,'#b7a35d','#e3d486',point=>[point[0],point[1],point[2]]))worm([65,223,-103],[65,223,-76],az,Math.round(state.v/8));
   box([65,223,-117],[34,35,18],'#20272b','#080c0e',az);
   line(az([-48,205,-20]),panel([-m.width*.55,0,-8]),'#c5d4d2',6);
   line(az([48,205,-20]),panel([m.width*.55,0,-8]),'#c5d4d2',6);
@@ -502,3 +568,4 @@ function tick(t){if(state.lastFrame===null)state.lastFrame=t;let d=Math.min(.2,(
 function wire(){$('codeEditor').value=defaultSketch;const count=()=>{$('codeLines').textContent=`${$('codeEditor').value.split('\n').length} lines`;};$('codeEditor').addEventListener('input',count);count();[['lightAz','lightAzOut','°'],['lightEl','lightElOut','°']].forEach(([i,o,u])=>{const f=()=>$(o).value=$(i).value+u;$(i).addEventListener('input',f);f();});$('compileBtn').addEventListener('click',compileSketch);$('runBtn').addEventListener('click',()=>{if(!state.compiled&&!compileSketch())return;if(state.auto?.phase==='FINAL'){restartAutoTracking();}else{state.running=!state.running;serialPrint(state.running?'Simulation running':'Simulation paused');}renderAll();});$('stepBtn').addEventListener('click',()=>{if(!state.compiled&&!compileSketch())return;runLoop();renderAll();});$('resetBtn').addEventListener('click',resetBoard);$('exampleBtn').addEventListener('click',()=>{$('codeEditor').value=defaultSketch;count();setMessage('기본 예제를 편집기에 복원했습니다.');});$('verifyBtn').addEventListener('click',runDesignVerification);$('clearLog').addEventListener('click',()=>{state.serial=[];renderSerial();});}
 function wireV2(){wire();['panelWidth','panelHeight'].forEach(id=>{const update=()=>{updateTorqueSimulation();renderAll();};$(id).addEventListener('input',update);$(id).addEventListener('change',update);});}
 wireV2();setup3dControls();updateEnvironment();renderAll();serialPrint('Virtual Uno ready — click Compile · Apply');requestAnimationFrame(tick);
+loadSuppliedCadMeshes();

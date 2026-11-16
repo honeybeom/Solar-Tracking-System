@@ -460,6 +460,11 @@ function drawRig(){
   horizontalGear([0,13,0],63);
   box([-93,25,-32],[64,28,38],'#38464a','#172126');
   worm([-114,25,-12],[-53,25,-12],point=>point,Math.round(state.h/8));
+  // Exposed horizontal gearbox at the turntable rim: this makes the D9 drive
+  // inspectable instead of hiding it below the acrylic top plate.
+  verticalGear([76,47,-66],29,az);
+  worm([76,47,-125],[76,47,-95],az,Math.round(state.h/8));
+  box([76,47,-139],[34,34,18],'#303d41','#11191c',az);
   disk(az([0,15,0]),49,'#f4f5f2','#a6b5b4');
   box([0,15,0],[110,8,110],'#1b2224','#0b1113',az);
   // Back housing and sloped mechanical cover visible in the supplied drawing.
@@ -470,9 +475,11 @@ function drawRig(){
   // Elevation hinge housing and two support arms. They remain attached to D9.
   box([-5,161,-20],[98,22,58],'#dce5e4','#6e8588',az);
   disk(az([0,172,-25]),24,'#313c3f','#b5c7c6');
-  verticalGear([-48,173,-55],27,az);
-  worm([-103,173,-55],[-66,173,-55],az,Math.round(state.v/8));
-  box([-108,173,-55],[16,35,35],'#39464a','#151d20',az);
+  // Exposed elevation gearbox at the right hinge: this stays with the D9
+  // assembly and its worm phase follows the D10 command.
+  verticalGear([65,173,-48],27,az);
+  worm([65,173,-103],[65,173,-76],az,Math.round(state.v/8));
+  box([65,173,-117],[34,35,18],'#39464a','#151d20',az);
   line(az([-48,155,-20]),panel([-m.width*.55,0,-8]),'#bccdcb',6);
   line(az([48,155,-20]),panel([m.width*.55,0,-8]),'#bccdcb',6);
   line(az([0,172,-18]),panel([0,0,-10]),'#d9e4e2',8);

@@ -271,140 +271,818 @@ void showLcd2(String line1, String line2) {
 // Default Uno sketch: two independent NEMA17 + A4988/DRV8825 axes with
 // 30:1 worm reducers.  This is the code presented to users in the editor.
 // It avoids runToPosition()/delay(), so both motors are serviced together.
-const defaultSketch = `// 2축 태양광 추적 및 탄소 저감량 모니터링 시스템
-// Arduino Uno + NEMA17 2개 + A4988/DRV8825 2개 + 30:1 웜기어
-// CdS 센서 4개(A0~A3) / LCD 2개 / INA219(0x40)
+const defaultSketch = `// ============================================================
+// 2-Axis Solar Tracking and Carbon Reduction Monitor
+// Arduino Uno / ATmega328P
+//
+// H STEP D2 / DIR D3
+// V STEP D4 / DIR D5
+// ENABLE D8 (active LOW)
+// LDR A0~A3
+// LCD1 0x26 / LCD2 0x27
+// INA219 0x40
+//
+// Optional HOME sensors: D6, D7 (not required by default)
+//
+// LCD: 300ms normal refresh, changed spans only
+// Control: 100ms
+// Motor: AccelStepper.run() in every loop
+// ============================================================
 
 #include <Wire.h>
 #include <AccelStepper.h>
 #include <LiquidCrystal_I2C.h>
 #include <Adafruit_INA219.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
 
-// I2C LCD: LCD1은 추적 전 발전량, LCD2는 추적 후/결과
+// ---------------- Hardware ----------------
+
 LiquidCrystal_I2C lcd1(0x26, 16, 2);
 LiquidCrystal_I2C lcd2(0x27, 16, 2);
-Adafruit_INA219 ina219;
+Adafruit_INA219 ina219(0x40);
 
-// A4988/DRV8825 STEP/DIR 연결
-// 수평축: D2 STEP, D3 DIR / 수직축: D4 STEP, D5 DIR / ENABLE: D8
 AccelStepper motorH(AccelStepper::DRIVER, 2, 3);
 AccelStepper motorV(AccelStepper::DRIVER, 4, 5);
-const int ENABLE_PIN = 8;
 
-// NEMA17 1.8°(200 step/rev), 1/8 microstep, 30:1 웜기어
-const float MOTOR_STEPS_PER_REV = 200;
-const float MICROSTEPS = 8;
-const float WORM_RATIO_H = 30;
-const float WORM_RATIO_V = 30;
-const float STEPS_PER_DEG_H = MOTOR_STEPS_PER_REV * MICROSTEPS * WORM_RATIO_H / 360.0;
-const float STEPS_PER_DEG_V = MOTOR_STEPS_PER_REV * MICROSTEPS * WORM_RATIO_V / 360.0;
+const uint8_t ENABLE_PIN = 8;
+const uint8_t HOME_H_PIN = 6;
+const uint8_t HOME_V_PIN = 7;
 
-// 기구 안전 범위와 제어 보정값
+// Existing hardware has no HOME sensors.
+// Change to true ONLY if both sensors are installed.
+const bool USE_HOME_SENSORS = false;
+
+// HOME sensor electrical level when triggered.
+// Configure only when using actual HOME sensors.
+const uint8_t HOME_ACTIVE_LEVEL = LOW;
+
+// ---------------- Mechanical Settings ----------------
+
+const float MOTOR_STEPS_PER_REV = 200.0f;
+const float MICROSTEPS = 8.0f;
+const float WORM_RATIO_H = 30.0f;
+const float WORM_RATIO_V = 30.0f;
+
+const float STEPS_PER_DEG_H =
+  MOTOR_STEPS_PER_REV * MICROSTEPS *
+  WORM_RATIO_H / 360.0f;
+
+const float STEPS_PER_DEG_V =
+  MOTOR_STEPS_PER_REV * MICROSTEPS *
+  WORM_RATIO_V / 360.0f;
+
 const int MIN_ANGLE = 20;
 const int MAX_ANGLE = 160;
 const int HOME_ANGLE = 90;
+
+// Only applicable when USE_HOME_SENSORS is true.
+// Assumption: HOME sensor is at the MIN side.
+const int SENSOR_ANGLE_H = MIN_ANGLE;
+const int SENSOR_ANGLE_V = MIN_ANGLE;
+
+// -1 = seek toward decreasing software angle.
+// Must match physical DIR wiring.
+const int8_t HOME_DIR_H = -1;
+const int8_t HOME_DIR_V = -1;
+
+// ---------------- Motor Settings ----------------
+
+// Original motion settings: unchanged
+const float MAX_SPEED_H = 420.0f;
+const float ACCEL_H = 260.0f;
+const float MAX_SPEED_V = 320.0f;
+const float ACCEL_V = 200.0f;
+
+// Optional low-speed homing
+const float HOME_SPEED_H = 180.0f;
+const float HOME_SPEED_V = 160.0f;
+const float HOME_ACCEL_H = 120.0f;
+const float HOME_ACCEL_V = 100.0f;
+
+const unsigned long HOME_TIMEOUT_MS = 150000UL;
+const unsigned long CENTER_TIMEOUT_MS = 60000UL;
+const unsigned long HOME_DEBOUNCE_MS = 20UL;
+const int HOME_BACKOFF_DEG = 3;
+const int HOME_MAX_TRAVEL_DEG = 142;
+
+// ---------------- Control Settings ----------------
+
 const int LDR_TOLERANCE = 35;
 const int TRACK_STEP_DEG = 1;
 const int STABLE_READS_REQUIRED = 10;
-const int CONTROL_INTERVAL_MS = 100;
-const int MEASURE_SAMPLES = 50;       // 5초: 100 ms × 50
-const int STABILIZE_SAMPLES = 300;    // 30초: 100 ms × 300
+
+const unsigned long CONTROL_MS = 100UL;
+const unsigned long LCD_MS = 300UL;
+const unsigned long RESULT_PAGE_MS = 3000UL;
+const unsigned long TRACK_TIMEOUT_MS = 120000UL;
+
+const int MEASURE_SAMPLES = 50;
+const int STABILIZE_SAMPLES = 300;
+
+// INA219 default 32V/2A calibration
+// Range guards, not a guarantee of correct wiring.
+const float MAX_VALID_V = 32.0f;
+const float MAX_VALID_CURRENT_A = 3.2f;
+const uint8_t MAX_INA_ERRORS = 3;
+
+// Keep holding torque on fault.
+// Set false only if the mechanism is safe unpowered.
+const bool HOLD_ON_ERROR = true;
+
+// ---------------- States ----------------
+
+enum Phase : uint8_t {
+  PH_HOMING,
+  PH_BEFORE,
+  PH_TRACK,
+  PH_STABILIZE,
+  PH_AFTER,
+  PH_RESULT,
+  PH_ERROR
+};
+
+enum HomeStep : uint8_t {
+  HS_H_RELEASE,
+  HS_H_SEEK,
+  HS_V_RELEASE,
+  HS_V_SEEK,
+  HS_CENTER
+};
+
+enum Fault : uint8_t {
+  FAULT_NONE,
+  FAULT_INA_INIT,
+  FAULT_INA_READ,
+  FAULT_HOME_H,
+  FAULT_HOME_V,
+  FAULT_HOME_CENTER,
+  FAULT_TRACK_TIMEOUT,
+  FAULT_H_LIMIT,
+  FAULT_V_LIMIT,
+  FAULT_HV_LIMIT
+};
+
+enum TrackStatus : uint8_t {
+  TS_ACTIVE,
+  TS_ALIGNED,
+  TS_H_LIMIT,
+  TS_V_LIMIT,
+  TS_HV_LIMIT
+};
+
+// ---------------- Measurements ----------------
+
+struct PowerReading {
+  float voltageV;
+  float currentA;
+  float powerW;
+};
+
+Phase phase = PH_BEFORE;
+HomeStep homeStep = HS_H_SEEK;
+Fault fault = FAULT_NONE;
 
 int targetH = HOME_ANGLE;
 int targetV = HOME_ANGLE;
 int errH = 0;
 int errV = 0;
-int phase = 0;       // 0 전측정 / 1 추적 / 2 안정화 / 3 후측정 / 4 결과
+
 int sampleCount = 0;
 int stableCount = 0;
-int page = 0;
+uint8_t page = 0;
 
-float sumP = 0;
-float sumV = 0;
-float sumI = 0;
-float beforeP = 0;
-float afterP = 0;
-float afterV = 0;
-float afterI = 0;
-float rate = 0;
-float energyWh = 0;
+float sumP = 0.0f;
+float sumV = 0.0f;
+float sumI = 0.0f;
+
+float beforeP = 0.0f;
+float afterP = 0.0f;
+float afterV = 0.0f;
+float afterI = 0.0f;
+float rate = 0.0f;
+
+// Accumulate integer micro-Wh.
+// Display conversion remains Wh.
+uint64_t energyMicroWh = 0ULL;
 
 unsigned long lastControlMs = 0;
+unsigned long lastEnergyMs = 0;
+unsigned long lastLcdMs = 0;
+unsigned long trackStartMs = 0;
+unsigned long resultPageMs = 0;
 
-void setup() {
-  pinMode(ENABLE_PIN, OUTPUT);
-  digitalWrite(ENABLE_PIN, LOW);  // 대부분의 A4988/DRV8825는 LOW가 활성
+unsigned long homeStepStartMs = 0;
+unsigned long homeDebounceMs = 0;
 
-  motorH.setMaxSpeed(420);        // 웜기어 출력축 기준 약 3.1°/s
-  motorH.setAcceleration(260);
-  motorV.setMaxSpeed(320);        // 패널 하중을 고려해 수직축은 낮게 설정
-  motorV.setAcceleration(200);
-  setHorizontalTarget(HOME_ANGLE);
-  setVerticalTarget(HOME_ANGLE);
+bool energyClockReady = false;
+bool homeDebouncing = false;
 
-  lcd1.init();
-  lcd1.backlight();
-  lcd2.init();
-  lcd2.backlight();
-  ina219.begin();
+uint8_t inaErrorCount = 0;
 
-  showLcd1("BEFORE TRACK", "MEASURING...");
-  showLcd2("AFTER TRACK", "WAIT...");
+// Cached display characters.
+// 2 LCD x 2 rows x 16 characters.
+char lcdCache[2][2][17] = {{{0}}};
+
+// ---------------- Forward Declarations ----------------
+
+void refreshDisplay(bool immediate);
+void enterFault(Fault code);
+void setHTarget(int angle);
+void setVTarget(int angle);
+void beginTracking();
+void beginHoming();
+void updateHoming();
+TrackStatus updateLdrTargets();
+void updateTracking();
+void updateStabilization();
+void measureBefore(float p);
+void measureAfter(float v, float i, float p);
+
+// ============================================================
+// Math / Motor Utilities
+// ============================================================
+
+long roundedSteps(float value) {
+  return (long)(value >= 0.0f ?
+                value + 0.5f : value - 0.5f);
 }
 
-void loop() {
-  // 반드시 매 loop마다 호출: 두 축이 동시에 가감속하며 이동한다.
-  motorH.run();
-  motorV.run();
+long hAngleSteps(float angle) {
+  return roundedSteps(
+    (angle - HOME_ANGLE) * STEPS_PER_DEG_H);
+}
 
+long vAngleSteps(float angle) {
+  return roundedSteps(
+    (angle - HOME_ANGLE) * STEPS_PER_DEG_V);
+}
+
+long hTravelSteps(float angle) {
+  return roundedSteps(angle * STEPS_PER_DEG_H);
+}
+
+long vTravelSteps(float angle) {
+  return roundedSteps(angle * STEPS_PER_DEG_V);
+}
+
+void setNormalSpeeds() {
+  motorH.setMaxSpeed(MAX_SPEED_H);
+  motorH.setAcceleration(ACCEL_H);
+  motorV.setMaxSpeed(MAX_SPEED_V);
+  motorV.setAcceleration(ACCEL_V);
+}
+
+void setHomeSpeeds() {
+  motorH.setMaxSpeed(HOME_SPEED_H);
+  motorH.setAcceleration(HOME_ACCEL_H);
+  motorV.setMaxSpeed(HOME_SPEED_V);
+  motorV.setAcceleration(HOME_ACCEL_V);
+}
+
+void setHTarget(int angle) {
+  targetH = constrain(angle, MIN_ANGLE, MAX_ANGLE);
+  motorH.moveTo(hAngleSteps(targetH));
+}
+
+void setVTarget(int angle) {
+  targetV = constrain(angle, MIN_ANGLE, MAX_ANGLE);
+  motorV.moveTo(vAngleSteps(targetV));
+}
+
+// Immediate step-command stop.
+// This does not decelerate the physical motor.
+void emergencyStop() {
+  motorH.setCurrentPosition(motorH.currentPosition());
+  motorV.setCurrentPosition(motorV.currentPosition());
+
+  if (!HOLD_ON_ERROR) {
+    digitalWrite(ENABLE_PIN, HIGH);
+  }
+}
+
+// ============================================================
+// LCD Differential Update
+// ============================================================
+
+// Writes only contiguous changed character spans.
+// No lcd.clear() during normal operation.
+// Maximum 16 visible characters per row.
+void writeDiff(
+    LiquidCrystal_I2C &lcd,
+    char *oldLine,
+    uint8_t row,
+    const char *source) {
+
+  char next[17];
+  uint8_t i = 0;
+
+  while (i < 16 && source[i] != '\0') {
+    next[i] = source[i];
+    i++;
+  }
+
+  while (i < 16) {
+    next[i++] = ' ';
+  }
+  next[16] = '\0';
+
+  uint8_t pos = 0;
+
+  while (pos < 16) {
+    if (oldLine[pos] == next[pos]) {
+      pos++;
+      continue;
+    }
+
+    uint8_t start = pos;
+
+    // Find the end of one contiguous changed span.
+    while (pos < 16 && oldLine[pos] != next[pos]) {
+      pos++;
+    }
+
+    lcd.setCursor(start, row);
+
+    for (uint8_t j = start; j < pos; j++) {
+      lcd.write((uint8_t)next[j]);
+      oldLine[j] = next[j];
+    }
+  }
+
+  oldLine[16] = '\0';
+}
+
+void showScreen(
+    const char *a0, const char *a1,
+    const char *b0, const char *b1) {
+
+  writeDiff(lcd1, lcdCache[0][0], 0, a0);
+  writeDiff(lcd1, lcdCache[0][1], 1, a1);
+  writeDiff(lcd2, lcdCache[1][0], 0, b0);
+  writeDiff(lcd2, lcdCache[1][1], 1, b1);
+}
+
+// AVR snprintf generally has no float %f support.
+void formatFloat(
+    float number, uint8_t decimals,
+    char *buffer) {
+  dtostrf(number, 1, decimals, buffer);
+}
+
+// ============================================================
+// Display Renderer
+// ============================================================
+
+void refreshDisplay(bool immediate) {
   unsigned long now = millis();
-  if (now - lastControlMs < CONTROL_INTERVAL_MS) return;
-  lastControlMs = now;
 
-  float voltage = ina219.getBusVoltage_V();
-  float current = ina219.getCurrent_mA() / 1000.0;
-  if (current < 0) current = 0;
-  float power = voltage * current;
+  if (!immediate &&
+      (unsigned long)(now - lastLcdMs) < LCD_MS) {
+    return;
+  }
 
-  // 100 ms 단위 누적 발전량(Wh)
-  energyWh = energyWh + power * CONTROL_INTERVAL_MS / 3600000.0;
+  lastLcdMs = now;
 
-  if (phase == 0) {
-    measureBefore(power);
+  char a0[17] = "";
+  char a1[17] = "";
+  char b0[17] = "";
+  char b1[17] = "";
+
+  char n1[18];
+  char n2[18];
+
+  if (phase == PH_HOMING) {
+    strcpy(a0, "HOMING");
+
+    if (homeStep == HS_H_RELEASE)
+      strcpy(a1, "H RELEASE");
+    else if (homeStep == HS_H_SEEK)
+      strcpy(a1, "H SEEK");
+    else if (homeStep == HS_V_RELEASE)
+      strcpy(a1, "V RELEASE");
+    else if (homeStep == HS_V_SEEK)
+      strcpy(a1, "V SEEK");
+    else
+      strcpy(a1, "MOVE TO 90 DEG");
+
+    strcpy(b0, "POSITION SETUP");
+    strcpy(b1, "MOTOR ACTIVE");
   }
-  else if (phase == 1) {
-    runTracking();
+
+  else if (phase == PH_ERROR) {
+    strcpy(a0, "SYSTEM ERROR");
+    strcpy(a1, "MOTORS STOPPED");
+
+    switch (fault) {
+      case FAULT_INA_INIT:
+        strcpy(b0, "INA219 ERROR");
+        strcpy(b1, "INIT FAILED");
+        break;
+
+      case FAULT_INA_READ:
+        strcpy(b0, "INA219 ERROR");
+        strcpy(b1, "READ FAILED");
+        break;
+
+      case FAULT_HOME_H:
+        strcpy(b0, "H HOME ERROR");
+        strcpy(b1, "CHECK SENSOR");
+        break;
+
+      case FAULT_HOME_V:
+        strcpy(b0, "V HOME ERROR");
+        strcpy(b1, "CHECK SENSOR");
+        break;
+
+      case FAULT_HOME_CENTER:
+        strcpy(b0, "HOME ERROR");
+        strcpy(b1, "CENTER TIMEOUT");
+        break;
+
+      case FAULT_TRACK_TIMEOUT:
+        strcpy(b0, "TRACK ERROR");
+        strcpy(b1, "TIMEOUT");
+        break;
+
+      case FAULT_H_LIMIT:
+        strcpy(b0, "TRACK ERROR");
+        strcpy(b1, "H LIMIT");
+        break;
+
+      case FAULT_V_LIMIT:
+        strcpy(b0, "TRACK ERROR");
+        strcpy(b1, "V LIMIT");
+        break;
+
+      case FAULT_HV_LIMIT:
+        strcpy(b0, "TRACK ERROR");
+        strcpy(b1, "HV LIMIT");
+        break;
+
+      default:
+        strcpy(b0, "SYSTEM ERROR");
+        strcpy(b1, "UNKNOWN");
+        break;
+    }
   }
-  else if (phase == 2) {
-    waitForStabilization();
-  }
-  else if (phase == 3) {
-    measureAfter(voltage, current, power);
-  }
+
   else {
-    showResultPages();
+    strcpy(a0, "BEFORE TRACK");
+
+    if (phase == PH_BEFORE) {
+      strcpy(a1, "MEASURING...");
+    } else {
+      formatFloat(beforeP, 2, n1);
+      snprintf(a1, sizeof(a1), "P:%sW", n1);
+    }
+
+    if (phase == PH_BEFORE) {
+      strcpy(b0, "AFTER TRACK");
+      strcpy(b1, "WAIT...");
+    }
+
+    else if (phase == PH_TRACK) {
+      strcpy(b0, "TRACKING");
+      snprintf(
+        b1, sizeof(b1),
+        "H:%d V:%d", errH, errV);
+    }
+
+    else if (phase == PH_STABILIZE) {
+      strcpy(b0, "TRACK COMPLETE");
+      strcpy(b1, "WAIT 30 SEC");
+    }
+
+    else if (phase == PH_AFTER) {
+      strcpy(b0, "AFTER MEASURE");
+      strcpy(b1, "MEASURING...");
+    }
+
+    else if (phase == PH_RESULT) {
+      switch (page) {
+        case 0:
+          strcpy(b0, "AFTER POWER");
+          formatFloat(afterP, 2, n1);
+          formatFloat(rate, 1, n2);
+          snprintf(
+            b1, sizeof(b1),
+            "%sW %s%%", n1, n2);
+          break;
+
+        case 1:
+          strcpy(b0, "VOLT / CURRENT");
+          formatFloat(afterV, 2, n1);
+          formatFloat(afterI, 2, n2);
+          snprintf(
+            b1, sizeof(b1),
+            "%sV %sA", n1, n2);
+          break;
+
+        case 2:
+          strcpy(b0, "ENERGY");
+          formatFloat(
+            (float)energyMicroWh / 1000000.0f,
+            3, n1);
+          snprintf(
+            b1, sizeof(b1), "%sWh", n1);
+          break;
+
+        default:
+          strcpy(b0, "CO2 REDUCTION");
+
+          // Original carbon reduction formula unchanged.
+          formatFloat(
+            ((float)energyMicroWh / 1000000.0f)
+              * 0.4541f,
+            3, n1);
+          snprintf(
+            b1, sizeof(b1), "%sg", n1);
+          break;
+      }
+    }
   }
+
+  showScreen(a0, a1, b0, b1);
 }
 
-void runTracking() {
-  bool aligned = readLightSensorsAndSetTargets();
-  showLcd2("TRACKING", "H:" + String(errH) + " V:" + String(errV));
+// ============================================================
+// Error Handling
+// ============================================================
 
-  if (aligned && motorH.distanceToGo() == 0 && motorV.distanceToGo() == 0) {
-    stableCount++;
+void enterFault(Fault code) {
+  if (phase == PH_ERROR) return;
+
+  fault = code;
+  emergencyStop();
+  phase = PH_ERROR;
+
+  // Critical error display: immediate.
+  refreshDisplay(true);
+}
+
+// ============================================================
+// INA219
+// ============================================================
+
+bool readPower(PowerReading &r) {
+  float v = ina219.getBusVoltage_V();
+  bool voltageOK = ina219.success();
+
+  float mA = ina219.getCurrent_mA();
+  bool currentOK = ina219.success();
+
+  if (!voltageOK || !currentOK) return false;
+
+  if (!isfinite(v) || !isfinite(mA)) return false;
+
+  float currentA = mA / 1000.0f;
+
+  if (v < 0.0f || v > MAX_VALID_V) return false;
+
+  if (currentA < -MAX_VALID_CURRENT_A ||
+      currentA > MAX_VALID_CURRENT_A) {
+    return false;
+  }
+
+  // Preserve original behavior: negative current -> zero.
+  if (currentA < 0.0f) currentA = 0.0f;
+
+  float p = v * currentA;
+
+  if (!isfinite(p) || p < 0.0f) return false;
+
+  r.voltageV = v;
+  r.currentA = currentA;
+  r.powerW = p;
+  return true;
+}
+
+// Real-time energy accumulation.
+// Integer microWh avoids repeated addition into a large float.
+void accumulateEnergy(
+    unsigned long now,
+    bool valid,
+    float powerW) {
+
+  if (!energyClockReady) {
+    lastEnergyMs = now;
+    energyClockReady = true;
+    return;
+  }
+
+  unsigned long dt = now - lastEnergyMs;
+  lastEnergyMs = now;
+
+  if (!valid || dt == 0) return;
+
+  // microWh = W * milliseconds / 3.6
+  // Avoid non-finite values and overflow.
+  float increment = powerW * ((float)dt / 3.6f);
+
+  if (!isfinite(increment) || increment <= 0.0f)
+    return;
+
+  // This project's normal increments are far below this.
+  // Additional guard against anomalous intervals.
+  if (increment > 1000000000.0f) return;
+
+  uint64_t add = (uint64_t)(increment + 0.5f);
+  if (UINT64_MAX - energyMicroWh < add) return;
+
+  energyMicroWh += add;
+}
+
+// ============================================================
+// Optional HOME Sensor Utilities
+// ============================================================
+
+bool homeActive(uint8_t pin) {
+  return digitalRead(pin) == HOME_ACTIVE_LEVEL;
+}
+
+void resetHomeDebounce() {
+  homeDebouncing = false;
+}
+
+bool homeStable(
+    uint8_t pin,
+    bool expected,
+    unsigned long now) {
+
+  if (homeActive(pin) != expected) {
+    homeDebouncing = false;
+    return false;
+  }
+
+  if (!homeDebouncing) {
+    homeDebouncing = true;
+    homeDebounceMs = now;
+    return false;
+  }
+
+  return (unsigned long)(now - homeDebounceMs)
+           >= HOME_DEBOUNCE_MS;
+}
+
+void startHSeek() {
+  homeStep = HS_H_SEEK;
+  homeStepStartMs = millis();
+  resetHomeDebounce();
+
+  motorH.move(
+    (long)HOME_DIR_H *
+    hTravelSteps(HOME_MAX_TRAVEL_DEG));
+
+  refreshDisplay(true);
+}
+
+void startVSeek() {
+  homeStep = HS_V_SEEK;
+  homeStepStartMs = millis();
+  resetHomeDebounce();
+
+  motorV.move(
+    (long)HOME_DIR_V *
+    vTravelSteps(HOME_MAX_TRAVEL_DEG));
+
+  refreshDisplay(true);
+}
+
+void prepareVHome() {
+  if (homeActive(HOME_V_PIN)) {
+    homeStep = HS_V_RELEASE;
+    homeStepStartMs = millis();
+    resetHomeDebounce();
+
+    motorV.move(
+      (long)(-HOME_DIR_V) *
+      vTravelSteps(HOME_BACKOFF_DEG));
+
+    refreshDisplay(true);
   } else {
-    stableCount = 0;
-  }
-
-  if (stableCount >= STABLE_READS_REQUIRED) {
-    phase = 2;
-    sampleCount = 0;
-    showLcd2("TRACK COMPLETE", "WAIT 30 SEC");
+    startVSeek();
   }
 }
 
-// A0 좌상, A1 우상, A2 좌하, A3 우하.  목표각은 한 번에 1°만 수정한다.
-bool readLightSensorsAndSetTargets() {
+void beginHoming() {
+  phase = PH_HOMING;
+  setHomeSpeeds();
+
+  if (homeActive(HOME_H_PIN)) {
+    homeStep = HS_H_RELEASE;
+    homeStepStartMs = millis();
+    resetHomeDebounce();
+
+    motorH.move(
+      (long)(-HOME_DIR_H) *
+      hTravelSteps(HOME_BACKOFF_DEG));
+
+    refreshDisplay(true);
+  } else {
+    startHSeek();
+  }
+}
+
+void updateHoming() {
+  unsigned long now = millis();
+
+  switch (homeStep) {
+    case HS_H_RELEASE:
+      if (homeStable(HOME_H_PIN, false, now)) {
+        motorH.setCurrentPosition(motorH.currentPosition());
+        startHSeek();
+      } else if (
+          (unsigned long)(now - homeStepStartMs)
+             >= HOME_TIMEOUT_MS ||
+          (motorH.distanceToGo() == 0 &&
+           homeActive(HOME_H_PIN))) {
+        enterFault(FAULT_HOME_H);
+      }
+      break;
+
+    case HS_H_SEEK:
+      if (homeStable(HOME_H_PIN, true, now)) {
+        motorH.setCurrentPosition(
+          hAngleSteps(SENSOR_ANGLE_H));
+
+        targetH = SENSOR_ANGLE_H;
+        prepareVHome();
+      } else if (
+          (unsigned long)(now - homeStepStartMs)
+            >= HOME_TIMEOUT_MS ||
+          motorH.distanceToGo() == 0) {
+        enterFault(FAULT_HOME_H);
+      }
+      break;
+
+    case HS_V_RELEASE:
+      if (homeStable(HOME_V_PIN, false, now)) {
+        motorV.setCurrentPosition(motorV.currentPosition());
+        startVSeek();
+      } else if (
+          (unsigned long)(now - homeStepStartMs)
+             >= HOME_TIMEOUT_MS ||
+          (motorV.distanceToGo() == 0 &&
+           homeActive(HOME_V_PIN))) {
+        enterFault(FAULT_HOME_V);
+      }
+      break;
+
+    case HS_V_SEEK:
+      if (homeStable(HOME_V_PIN, true, now)) {
+        motorV.setCurrentPosition(
+          vAngleSteps(SENSOR_ANGLE_V));
+
+        targetV = SENSOR_ANGLE_V;
+        setNormalSpeeds();
+
+        setHTarget(HOME_ANGLE);
+        setVTarget(HOME_ANGLE);
+
+        homeStep = HS_CENTER;
+        homeStepStartMs = now;
+        refreshDisplay(true);
+      } else if (
+          (unsigned long)(now - homeStepStartMs)
+            >= HOME_TIMEOUT_MS ||
+          motorV.distanceToGo() == 0) {
+        enterFault(FAULT_HOME_V);
+      }
+      break;
+
+    case HS_CENTER:
+      if (motorH.distanceToGo() == 0 &&
+          motorV.distanceToGo() == 0) {
+        phase = PH_BEFORE;
+        sampleCount = 0;
+        sumP = sumV = sumI = 0.0f;
+        refreshDisplay(true);
+      } else if (
+          (unsigned long)(now - homeStepStartMs)
+            >= CENTER_TIMEOUT_MS) {
+        enterFault(FAULT_HOME_CENTER);
+      }
+      break;
+  }
+}
+
+// ============================================================
+// Tracking
+// ============================================================
+
+void beginTracking() {
+  phase = PH_TRACK;
+  stableCount = 0;
+  trackStartMs = millis();
+  refreshDisplay(true);
+}
+
+// Original four-LDR error equations and directions unchanged.
+TrackStatus updateLdrTargets() {
   int tl = analogRead(A0);
   int tr = analogRead(A1);
   int bl = analogRead(A2);
@@ -416,106 +1094,290 @@ bool readLightSensorsAndSetTargets() {
   bool hAligned = abs(errH) <= LDR_TOLERANCE;
   bool vAligned = abs(errV) <= LDR_TOLERANCE;
 
+  bool hBlocked = false;
+  bool vBlocked = false;
+
   if (!hAligned && motorH.distanceToGo() == 0) {
-    if (errH > 0) setHorizontalTarget(targetH - TRACK_STEP_DEG);
-    else setHorizontalTarget(targetH + TRACK_STEP_DEG);
+    int nextH = targetH +
+      (errH > 0 ? -TRACK_STEP_DEG : TRACK_STEP_DEG);
+
+    if (nextH < MIN_ANGLE || nextH > MAX_ANGLE)
+      hBlocked = true;
+    else
+      setHTarget(nextH);
   }
+
   if (!vAligned && motorV.distanceToGo() == 0) {
-    if (errV > 0) setVerticalTarget(targetV + TRACK_STEP_DEG);
-    else setVerticalTarget(targetV - TRACK_STEP_DEG);
+    int nextV = targetV +
+      (errV > 0 ? TRACK_STEP_DEG : -TRACK_STEP_DEG);
+
+    if (nextV < MIN_ANGLE || nextV > MAX_ANGLE)
+      vBlocked = true;
+    else
+      setVTarget(nextV);
   }
-  return hAligned && vAligned;
+
+  if (hBlocked && vBlocked) return TS_HV_LIMIT;
+  if (hBlocked) return TS_H_LIMIT;
+  if (vBlocked) return TS_V_LIMIT;
+
+  if (hAligned && vAligned) return TS_ALIGNED;
+  return TS_ACTIVE;
 }
 
-// 웜기어 출력축 각도 → 모터 microstep 위치.  90°를 기계 원점으로 사용한다.
-void setHorizontalTarget(int degree) {
-  targetH = constrain(degree, MIN_ANGLE, MAX_ANGLE);
-  motorH.moveTo((targetH - HOME_ANGLE) * STEPS_PER_DEG_H);
+bool checkTrackingFault(TrackStatus status) {
+  if (status == TS_H_LIMIT) {
+    enterFault(FAULT_H_LIMIT);
+    return true;
+  }
+
+  if (status == TS_V_LIMIT) {
+    enterFault(FAULT_V_LIMIT);
+    return true;
+  }
+
+  if (status == TS_HV_LIMIT) {
+    enterFault(FAULT_HV_LIMIT);
+    return true;
+  }
+
+  return false;
 }
 
-void setVerticalTarget(int degree) {
-  targetV = constrain(degree, MIN_ANGLE, MAX_ANGLE);
-  motorV.moveTo((targetV - HOME_ANGLE) * STEPS_PER_DEG_V);
-}
+void updateTracking() {
+  if ((unsigned long)(millis() - trackStartMs)
+        >= TRACK_TIMEOUT_MS) {
+    enterFault(FAULT_TRACK_TIMEOUT);
+    return;
+  }
 
-void measureBefore(float power) {
-  sumP = sumP + power;
-  sampleCount++;
-  if (sampleCount >= MEASURE_SAMPLES) {
-    beforeP = sumP / sampleCount;
-    showLcd1("BEFORE TRACK", "P:" + String(beforeP, 2) + "W");
-    sumP = 0;
+  TrackStatus status = updateLdrTargets();
+
+  if (checkTrackingFault(status)) return;
+
+  if (status == TS_ALIGNED &&
+      motorH.distanceToGo() == 0 &&
+      motorV.distanceToGo() == 0) {
+    stableCount++;
+  } else {
+    stableCount = 0;
+  }
+
+  if (stableCount >= STABLE_READS_REQUIRED) {
+    phase = PH_STABILIZE;
     sampleCount = 0;
-    phase = 1;
+    refreshDisplay(true);
   }
 }
 
-void waitForStabilization() {
-  // 안정화 중 광량 변화가 감지되면 다시 추적한다.
+// ============================================================
+// Measurement Phases
+// ============================================================
+
+void measureBefore(float p) {
+  sumP += p;
+  sampleCount++;
+
+  if (sampleCount >= MEASURE_SAMPLES) {
+    beforeP = sumP / (float)sampleCount;
+    sumP = 0.0f;
+    sampleCount = 0;
+    beginTracking();
+  }
+}
+
+void updateStabilization() {
   int oldH = errH;
   int oldV = errV;
-  bool aligned = readLightSensorsAndSetTargets();
-  if (!aligned || abs(oldH - errH) > LDR_TOLERANCE || abs(oldV - errV) > LDR_TOLERANCE) {
-    phase = 1;
-    stableCount = 0;
+
+  TrackStatus status = updateLdrTargets();
+
+  if (checkTrackingFault(status)) return;
+
+  if (status != TS_ALIGNED ||
+      abs(oldH - errH) > LDR_TOLERANCE ||
+      abs(oldV - errV) > LDR_TOLERANCE) {
+
     sampleCount = 0;
+    stableCount = 0;
+    beginTracking();
     return;
   }
 
   sampleCount++;
+
   if (sampleCount >= STABILIZE_SAMPLES) {
+    phase = PH_AFTER;
     sampleCount = 0;
-    phase = 3;
-    showLcd2("AFTER MEASURE", "MEASURING...");
+    sumP = sumV = sumI = 0.0f;
+    refreshDisplay(true);
   }
 }
 
-void measureAfter(float voltage, float current, float power) {
-  sumP = sumP + power;
-  sumV = sumV + voltage;
-  sumI = sumI + current;
+void measureAfter(float v, float i, float p) {
+  sumP += p;
+  sumV += v;
+  sumI += i;
   sampleCount++;
+
   if (sampleCount >= MEASURE_SAMPLES) {
-    afterP = sumP / sampleCount;
-    afterV = sumV / sampleCount;
-    afterI = sumI / sampleCount;
-    rate = beforeP > 0.01 ? (afterP - beforeP) * 100.0 / beforeP : 0;
-    showLcd2("AFTER TRACK", "P:" + String(afterP, 2) + "W");
-    sumP = 0;
-    sumV = 0;
-    sumI = 0;
+    afterP = sumP / (float)sampleCount;
+    afterV = sumV / (float)sampleCount;
+    afterI = sumI / (float)sampleCount;
+
+    // Original increase-rate formula unchanged.
+    rate = beforeP > 0.01f ?
+      (afterP - beforeP) * 100.0f / beforeP :
+      0.0f;
+
+    sumP = sumV = sumI = 0.0f;
     sampleCount = 0;
+
     page = 0;
-    phase = 4;
+    phase = PH_RESULT;
+    resultPageMs = millis();
+
+    refreshDisplay(true);
   }
 }
 
-void showResultPages() {
-  sampleCount++;
-  if (sampleCount < 30) return;    // 3초마다 LCD2 페이지 전환
-  sampleCount = 0;
-
-  if (page == 0) showLcd2("AFTER POWER", String(afterP, 2) + "W " + String(rate, 1) + "%");
-  if (page == 1) showLcd2("VOLT / CURRENT", String(afterV, 2) + "V " + String(afterI, 2) + "A");
-  if (page == 2) showLcd2("ENERGY", String(energyWh, 3) + "Wh");
-  if (page == 3) showLcd2("CO2 REDUCTION", String(energyWh * 0.4541, 3) + "g");
-
-  page++;
-  if (page > 3) page = 0;
+void updateResultPages(unsigned long now) {
+  if ((unsigned long)(now - resultPageMs)
+        >= RESULT_PAGE_MS) {
+    resultPageMs = now;
+    page = (page + 1) % 4;
+    refreshDisplay(true);
+  }
 }
 
-void showLcd1(String line1, String line2) {
-  lcd1.setCursor(0, 0);
-  lcd1.print(line1 + "                ");
-  lcd1.setCursor(0, 1);
-  lcd1.print(line2 + "                ");
+// ============================================================
+// Setup
+// ============================================================
+
+void setup() {
+  pinMode(ENABLE_PIN, OUTPUT);
+  digitalWrite(ENABLE_PIN, LOW);
+
+  // Only used in optional actual-sensor homing mode.
+  if (USE_HOME_SENSORS) {
+    pinMode(HOME_H_PIN, INPUT_PULLUP);
+    pinMode(HOME_V_PIN, INPUT_PULLUP);
+  }
+
+  setNormalSpeeds();
+
+  Wire.begin();
+
+  lcd1.init();
+  lcd1.backlight();
+  lcd2.init();
+  lcd2.backlight();
+
+  // Sensor initialization must be checked.
+  if (!ina219.begin()) {
+    enterFault(FAULT_INA_INIT);
+    return;
+  }
+
+  ina219.setCalibration_32V_2A();
+
+  lastControlMs = millis();
+  lastLcdMs = lastControlMs;
+
+  if (USE_HOME_SENSORS) {
+    beginHoming();
+  } else {
+    // Manual zero assumption.
+    // The physical axes MUST already be at 90 degrees.
+    // This is not actual Homing.
+    motorH.setCurrentPosition(0);
+    motorV.setCurrentPosition(0);
+    targetH = HOME_ANGLE;
+    targetV = HOME_ANGLE;
+
+    phase = PH_BEFORE;
+    refreshDisplay(true);
+  }
 }
 
-void showLcd2(String line1, String line2) {
-  lcd2.setCursor(0, 0);
-  lcd2.print(line1 + "                ");
-  lcd2.setCursor(0, 1);
-  lcd2.print(line2 + "                ");
+// ============================================================
+// Loop
+// ============================================================
+
+void loop() {
+  // Optional homing switch detection comes before run().
+  if (phase == PH_HOMING) {
+    updateHoming();
+  }
+
+  // Highest-frequency cooperative motor service.
+  // Not restricted to the 100ms control period.
+  if (phase != PH_ERROR) {
+    motorH.run();
+    motorV.run();
+  }
+
+  if (phase == PH_ERROR) return;
+
+  unsigned long now = millis();
+
+  if ((unsigned long)(now - lastControlMs)
+        >= CONTROL_MS) {
+
+    lastControlMs = now;
+
+    PowerReading r;
+    r.voltageV = 0.0f;
+    r.currentA = 0.0f;
+    r.powerW = 0.0f;
+
+    bool valid = readPower(r);
+
+    accumulateEnergy(now, valid, r.powerW);
+
+    if (!valid) {
+      if (inaErrorCount < 255) inaErrorCount++;
+
+      if (inaErrorCount >= MAX_INA_ERRORS) {
+        enterFault(FAULT_INA_READ);
+      }
+
+      // Invalid values are never used for phase sampling.
+      return;
+    }
+
+    inaErrorCount = 0;
+
+    switch (phase) {
+      case PH_BEFORE:
+        measureBefore(r.powerW);
+        break;
+
+      case PH_TRACK:
+        updateTracking();
+        break;
+
+      case PH_STABILIZE:
+        updateStabilization();
+        break;
+
+      case PH_AFTER:
+        measureAfter(
+          r.voltageV, r.currentA, r.powerW);
+        break;
+
+      case PH_RESULT:
+        updateResultPages(now);
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  // Normal 300ms display service.
+  // All phase/error transitions call refreshDisplay(true).
+  refreshDisplay(false);
 }`;
 
 const state = { running:false, compiled:null, scope:{}, loopDelay:.18, nextLoop:0, h:90, v:90,

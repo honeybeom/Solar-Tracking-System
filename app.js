@@ -480,10 +480,9 @@ function legacyCadRig(){
 }
 
 // -----------------------------------------------------------------------------
-// Design-reference renderer
-// Rebuilt from the user's supplied design image: square acrylic base, circular
-// rotating plate, rear housing, twin aluminium profiles, angled support and a
-// white-framed black-cell solar module. No previous STL/CAD mesh is rendered.
+// Mechanical assembly renderer — rebuilt solely from the user's reference
+// image and movement description.  It intentionally does not reuse any of the
+// earlier temporary upper-frame geometry.
 function drawRig(){
   const canvas=$('rigCanvas'),ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height,m=mechanics();
   const e=env(),yaw=viewer.yaw,pitch=viewer.pitch;
@@ -492,70 +491,57 @@ function drawRig(){
   const project=point=>{const q=camera(point),s=viewer.zoom*720/(720+q[2]);return {x:w*.5+q[0]*s,y:h*.79-q[1]*s,z:q[2],s};};
   const poly=(points,fill,stroke='#496a70')=>{const p=points.map(project);ctx.fillStyle=fill;ctx.strokeStyle=stroke;ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(p[0].x,p[0].y);p.slice(1).forEach(q=>ctx.lineTo(q.x,q.y));ctx.closePath();ctx.fill();ctx.stroke();};
   const line=(a,b,color,width=2,dash=[])=>{const p=project(a),q=project(b);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.setLineDash(dash);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();ctx.setLineDash([]);};
-  // Draw a decimated, supplied binary-STL mesh.  The source CAD is retained
-  // exactly as supplied; decimation only keeps the in-browser animation fast.
-  const drawSuppliedMesh=(name,anchor,size,transform=point=>point,fill='#52686c',stroke='#a8bab9',axisMap=point=>[point[0],point[2],point[1]])=>{
-    const mesh=suppliedCadMeshes[name]; if(!mesh)return false;
-    const faces=mesh.triangles.map(triangle=>{
-      const points=triangle.map(vertex=>{const raw=axisMap(vertex.map((value,axis)=>(value-mesh.center[axis])/mesh.span*size));return transform([anchor[0]+raw[0],anchor[1]+raw[1],anchor[2]+raw[2]]);});
-      return {points,depth:points.reduce((total,point)=>total+camera(point)[2],0)/3};
-    });
-    faces.sort((a,b)=>b.depth-a.depth).forEach(face=>poly(face.points,fill,stroke));
-    return true;
-  };
   const box=(center,size,top,side,transform=point=>point)=>{const [x,y,z]=center,[a,b,c]=size.map(v=>v/2),v=[[x-a,y-b,z-c],[x+a,y-b,z-c],[x+a,y+b,z-c],[x-a,y+b,z-c],[x-a,y-b,z+c],[x+a,y-b,z+c],[x+a,y+b,z+c],[x-a,y+b,z+c]].map(transform);[[0,1,2,3],[1,5,6,2],[5,4,7,6],[4,0,3,7],[3,2,6,7]].forEach((face,index)=>poly(face.map(i=>v[i]),index===4?top:side));};
-  const disk=(center,r,fill,stroke)=>{const q=[];for(let i=0;i<32;i++){const a=i*Math.PI*2/32;q.push([center[0]+Math.cos(a)*r,center[1],center[2]+Math.sin(a)*r]);}poly(q,fill,stroke);};
+  const disk=(center,r,fill,stroke,transform=point=>point)=>{const q=[];for(let i=0;i<40;i++){const a=i*Math.PI*2/40;q.push(transform([center[0]+Math.cos(a)*r,center[1],center[2]+Math.sin(a)*r]));}poly(q,fill,stroke);};
   const az=point=>rotateAzimuth(point,state.h),panel=point=>panelWorldPoint(point,state.h,state.v);
-  // Stylised but kinematically placed worm mechanisms. Horizontal: a fixed
-  // worm engages the rotating turntable wheel. Vertical: the second worm and
-  // wheel stay on the azimuth assembly and drive only the panel hinge.
-  const horizontalGear=(center,r)=>{const edge=[];for(let i=0;i<30;i++){const a=i*Math.PI*2/30;edge.push(az([center[0]+Math.cos(a)*r,center[1],center[2]+Math.sin(a)*r]));}poly(edge,'#232a2e','#9ca9aa');for(let i=0;i<30;i++){const a=i*Math.PI*2/30;line(az([center[0]+Math.cos(a)*(r-7),center[1]+2,center[2]+Math.sin(a)*(r-7)]),az([center[0]+Math.cos(a)*(r+5),center[1]+2,center[2]+Math.sin(a)*(r+5)]),'#aeb8b9',1.2);}};
-  const verticalGear=(center,r,transform)=>{const edge=[];for(let i=0;i<26;i++){const a=i*Math.PI*2/26;edge.push(transform([center[0],center[1]+Math.cos(a)*r,center[2]+Math.sin(a)*r]));}poly(edge,'#20272b','#98a5a6');for(let i=0;i<26;i++){const a=i*Math.PI*2/26;line(transform([center[0],center[1]+Math.cos(a)*(r-6),center[2]+Math.sin(a)*(r-6)]),transform([center[0],center[1]+Math.cos(a)*(r+5),center[2]+Math.sin(a)*(r+5)]),'#aab5b6',1.1);}};
-  const worm=(a,b,transform=point=>point,phase=0)=>{line(transform(a),transform(b),'#2e3539',8);for(let i=0;i<12;i++){const t=i/11,px=a[0]+(b[0]-a[0])*t,py=a[1]+(b[1]-a[1])*t,pz=a[2]+(b[2]-a[2])*t,offset=((i+phase)%3-1)*3;line(transform([px-4,py-7,pz+offset]),transform([px+4,py+7,pz-offset]),'#a3b0b1',1.6);}};
-  // Reference model: transparent acrylic enclosure with a black lower base.
+  const ringGear=(center,r,phase=0,transform=point=>point)=>{const edge=[];for(let i=0;i<32;i++){const a=i*Math.PI*2/32;edge.push(transform([center[0],center[1]+Math.cos(a)*r,center[2]+Math.sin(a)*r]));}poly(edge,'#151b1d','#d7e3e2');for(let i=0;i<32;i++){const a=i*Math.PI*2/32+phase;line(transform([center[0]-3,center[1]+Math.cos(a)*(r-5),center[2]+Math.sin(a)*(r-5)]),transform([center[0]-3,center[1]+Math.cos(a)*(r+5),center[2]+Math.sin(a)*(r+5)]),'#d7e3e2',1);}};
+  const wormAlongX=(left,right,y,z,phase=0,transform=point=>point)=>{line(transform([left,y,z]),transform([right,y,z]),'#141a1c',8);for(let i=0;i<14;i++){const x=left+(right-left)*i/13,a=i*.9+phase;line(transform([x,y+Math.cos(a)*6,z+Math.sin(a)*6]),transform([x,y-Math.cos(a)*6,z-Math.sin(a)*6]),'#c6d2d1',1.5);}};
+  const lcdFace=(corners,title,lines)=>{poly(corners,'#d7d9d2','#f7ffff');const inner=corners.map((p,i)=>{const next=corners[(i+1)%4],prev=corners[(i+3)%4];return [p[0]*.91+next[0]*.045+prev[0]*.045,p[1]*.91+next[1]*.045+prev[1]*.045,p[2]*.91+next[2]*.045+prev[2]*.045];});poly(inner,'#263c29','#0b120c');const at=inner.reduce((total,point)=>total.map((value,index)=>value+point[index]/4),[0,0,0]),p=project(at);ctx.fillStyle='#d7f28b';ctx.font='7px ui-monospace';ctx.textAlign='center';ctx.fillText(title,p.x,p.y-7);ctx.fillText((lines[0]||'').trim().slice(0,14),p.x,p.y+1);ctx.fillText((lines[1]||'').trim().slice(0,14),p.x,p.y+9);ctx.textAlign='start';};
+  const caption=(text,point,color='#c9e7e4')=>{const p=project(point);ctx.fillStyle=color;ctx.font='bold 10px ui-monospace';ctx.fillText(text,p.x+5,p.y-4);};
+
+  // 1) Fixed lower acrylic box.  The horizontal motor is inside this box and
+  // points upward; only its shaft, bearing and all structure above it rotate.
   for(let z=-330;z<=330;z+=55)line([-330,0,z],[330,0,z],'#123942',.55);for(let x=-330;x<=330;x+=55)line([x,0,-330],[x,0,330],'#123942',.55);
   box([0,-28,0],[232,10,232],'#111517','#030607');
   box([0,-18,0],[220,8,220],'#9aa8a9','#2d3b3e');
   box([0,-10,0],[210,8,210],'#080b0d','#111a1d');
-  // Clear cube walls, top plate, and front ventilation / access windows.
+  // Clear lower walls and top cover.
   const cube=[[-105,-6,-105],[105,-6,-105],[105,-6,105],[-105,-6,105],[-105,108,-105],[105,108,-105],[105,108,105],[-105,108,105]];
   poly([cube[0],cube[1],cube[5],cube[4]],'rgba(190,222,225,.18)','#b4d0d2');poly([cube[1],cube[2],cube[6],cube[5]],'rgba(190,222,225,.12)','#b4d0d2');poly([cube[3],cube[0],cube[4],cube[7]],'rgba(190,222,225,.13)','#b4d0d2');
   line(cube[4],cube[5],'#e6ffff',2);line(cube[5],cube[6],'#e6ffff',2);line(cube[6],cube[7],'#e6ffff',2);line(cube[7],cube[4],'#e6ffff',2);
   box([0,108,0],[216,5,216],'rgba(225,250,250,.28)','rgba(155,200,204,.18)');
-  box([-52,25,-108],[66,34,5],'#111719','#05080a');box([52,25,-108],[66,34,5],'#111719','#05080a');
-  // The user approved the lower acrylic enclosure, but requested that the
-  // unfinished upper assembly be removed completely before it is rebuilt.
-  // Stop here intentionally: no panel, posts, motors, gears, sensors, light,
-  // or temporary upper-frame geometry is rendered above the enclosure.
-  return;
-  if(!drawSuppliedMesh('bearingLower',[0,112,0],155,point=>point,'#7e9193','#d9eeee'))disk([0,113,0],72,'#e8eeee','#a6b8b9');
-  if(!drawSuppliedMesh('bearingUpper',[0,112,0],155,az,'#b7c9c9','#ecffff'))disk([0,117,0],58,'#1a2225','#9ab0b0');
-  // All moving parts above the transparent cover use D9 azimuth.
-  if(!drawSuppliedMesh('wormWheel',[0,124,0],112,az,'#303c40','#c6d4d4'))horizontalGear([0,120,0],54);
-  disk(az([0,124,0]),46,'#eff4f3','#a9bbbb');
-  // Two central aluminium profiles and the black motor blocks inside the case.
-  [[-28,0],[28,0],[-28,34],[28,34]].forEach(([x,z])=>{box([x,166,z],[18,88,18],'#edf2f1','#7e9294',az);[-5,0,5].forEach(dx=>line(az([x+dx,122,z-10]),az([x+dx,210,z-10]),'#526d72',.75));});
-  if(!drawSuppliedMesh('nemaBracket',[-58,152,-24],58,az,'#d0dbda','#f2ffff'))box([-58,157,-24],[54,44,48],'#111719','#030507',az);
-  if(!drawSuppliedMesh('nema17',[-58,157,-24],58,az,'#151d20','#91a6a8'))box([-58,157,-24],[54,44,48],'#111719','#030507',az);
-  if(!drawSuppliedMesh('nemaBracket',[57,164,-26],54,az,'#d0dbda','#f2ffff'))box([57,169,-26],[50,44,48],'#111719','#030507',az);
-  if(!drawSuppliedMesh('nema17',[57,169,-26],54,az,'#151d20','#91a6a8'))box([57,169,-26],[50,44,48],'#111719','#030507',az);
-  // Visible black horizontal worm at the upper turntable rim.
-  if(!drawSuppliedMesh('wormWheel',[73,139,-52],48,az,'#253136','#a8b8b7'))verticalGear([73,139,-52],25,az);
-  if(!drawSuppliedMesh('worm',[73,139,-89],48,az,'#b7a35d','#e3d486',point=>[point[0],point[1],point[2]]))worm([73,139,-102],[73,139,-76],az,Math.round(state.h/8));
-  box([73,139,-116],[34,32,18],'#222a2e','#0c1113',az);
-  // Elevation hinge housing and two support arms. They remain attached to D9.
-  box([-5,212,-18],[98,22,58],'#dce5e4','#6e8588',az);
-  disk(az([0,223,-25]),24,'#313c3f','#b5c7c6');
-  // Black elevation worm / wheel at the right hinge, as exposed in the
-  // supplied reference rendering. It follows D10 but remains on the D9 frame.
-  if(!drawSuppliedMesh('wormWheel',[65,223,-48],52,az,'#253136','#a8b8b7'))verticalGear([65,223,-48],27,az);
-  if(!drawSuppliedMesh('worm',[65,223,-89],52,az,'#b7a35d','#e3d486',point=>[point[0],point[1],point[2]]))worm([65,223,-103],[65,223,-76],az,Math.round(state.v/8));
-  box([65,223,-117],[34,35,18],'#20272b','#080c0e',az);
-  line(az([-48,205,-20]),panel([-m.width*.55,0,-8]),'#c5d4d2',6);
-  line(az([48,205,-20]),panel([m.width*.55,0,-8]),'#c5d4d2',6);
-  line(az([0,223,-18]),panel([0,0,-10]),'#e0e8e5',8);
-  // 5 W module: thick white frame, black cells and silver grid exactly in the
-  // design-image style. The entire module follows D9 + D10 directly.
+  // Upward facing azimuth motor, fixed to the lower box, with its output shaft.
+  box([0,39,0],[54,56,54],'#151a1c','#05090a');disk([0,68,0],23,'#242f31','#b8c8c8');
+  line([0,67,0],[0,114,0],'#d4e2df',7);caption('D9 · 수평 모터',[-32,50,-24],'#f5db7a');
+  // Actual LCD modules on two lower-box faces; their glyphs are read from the
+  // independent I²C LCD buffers, not hard-coded canvas text.
+  const l1=lcdText('26'),l2=lcdText('27');
+  lcdFace([[-90,66,-108],[-12,66,-108],[-12,33,-108],[-90,33,-108]],'LCD1 0x26',l1);
+  lcdFace([[108,66,-82],[108,66,-8],[108,33,-8],[108,33,-82]],'LCD2 0x27',l2);
+
+  // 2) D9 output: bearing, round rotating plate and the complete upper box.
+  disk([0,113,0],78,'#c6d1d1','#f4ffff');disk([0,117,0],69,'#1c2427','#9db5b6',az);disk([0,121,0],60,'#d9e4e2','#f5ffff',az);
+  box([0,125,0],[168,8,168],'rgba(225,250,250,.28)','rgba(155,200,204,.2)',az);
+  // Rotating transparent upper enclosure and aluminium corner profiles.
+  [[-72,-58],[72,-58],[-72,58],[72,58]].forEach(([x,z])=>box([x,164,z],[10,82,10],'#e8f0ee','#8ea2a2',az));
+  [[-76,58],[76,58]].forEach(([x,z])=>line(az([x,123,z]),az([x,205,z]),'#f3ffff',1.5));
+  box([0,205,0],[168,8,168],'rgba(218,242,242,.22)','rgba(141,187,188,.34)',az);
+  // 3) Side-facing elevation motor.  Its shaft and worm share a single X axis;
+  // the worm engages the Y–Z-plane wheel which transfers torque to the hinge.
+  box([83,183,-40],[46,46,56],'#151b1d','#05090a',az);
+  disk(az([58,183,-40]),20,'#334043','#d2e0df');
+  wormAlongX(10,60,183,-40,(state.v-90)*Math.PI/18,az);
+  ringGear([0,183,-40],31,(state.v-90)*Math.PI/18,az);
+  line(az([0,183,-40]),az([0,243,-18]),'#d0dddd',7);
+  box([0,238,-18],[76,18,48],'#dae4e1','#788d8e',az);
+  disk(az([0,258,-14]),22,'#222b2d','#c2d2d0');
+  caption('D10 · 측면 모터 → 웜',az([55,207,-62]),'#f5db7a');
+  caption('웜기어 · 수직 힌지',az([-43,197,-51]),'#f5db7a');
+  // Rigid supports stay with D9; the panel alone pivots about the X hinge via D10.
+  [-58,58].forEach(x=>{line(az([x,205,0]),az([x,258,0]),'#dce8e5',7);line(az([x,205,0]),az([x,258,-35]),'#799192',3);});
+  line(az([-84,260,0]),az([84,260,0]),'#eff9f7',8);
+  // 4) Solar module: all vertices use panelWorldPoint(), so D9 turns left/right
+  // and D10 raises/lowers it directly from Arduino-controlled angles.
   const halfW=m.width*worldPerMm/2,halfH=m.height*worldPerMm/2;
   const panelQuad=(x0,y0,x1,y1,z,fill,stroke)=>poly([[x0,y0,z],[x1,y0,z],[x1,y1,z],[x0,y1,z]].map(panel),fill,stroke);
   panelQuad(-halfW-12,-halfH-12,halfW+12,halfH+12,-6,'#f2f4f1','#798887');
@@ -565,10 +551,9 @@ function drawRig(){
   // Divider-shielded A0–A3 CdS sensor head on the panel face.
   panelQuad(-36,-36,36,36,8,'#10191a','#77dcd4');line(panel([0,-38,10]),panel([0,38,10]),'#79ece1',2);line(panel([-38,0,10]),panel([38,0,10]),'#79ece1',2);
   [[-19,-19],[19,-19],[-19,19],[19,19]].forEach(([x,y])=>{const c=panel([x,y,11]),p=project(c);ctx.fillStyle='#dcf47a';ctx.beginPath();ctx.arc(p.x,p.y,5*p.s,0,Math.PI*2);ctx.fill();});
-  // Power normal and the actual light-direction reference used in P=cos(theta).
-  const center=panel([0,0,12]),normal=panel([0,0,112]);line(center,normal,'#58f2e6',3);const n=project(normal);ctx.fillStyle='#7ffff2';ctx.font='bold 12px ui-monospace';ctx.fillText('N',n.x+5,n.y-4);
-  const sun=[center[0]+state.lightDirection[0]*330,center[1]+state.lightDirection[1]*330,center[2]+state.lightDirection[2]*330],sp=project(sun),cp=project(center),glow=ctx.createRadialGradient(sp.x,sp.y,3,sp.x,sp.y,45*sp.s);glow.addColorStop(0,'#fff3bd');glow.addColorStop(.25,'#ffd46b88');glow.addColorStop(1,'#ffd46b00');ctx.fillStyle=glow;ctx.beginPath();ctx.arc(sp.x,sp.y,45*sp.s,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff0a0';ctx.beginPath();ctx.arc(sp.x,sp.y,10*sp.s,0,Math.PI*2);ctx.fill();line(sun,center,'#f6d272',1,[5,5]);
-  ctx.fillStyle='#b9d6d4';ctx.font='11px ui-monospace';ctx.fillText(`D9 수평 ${state.h}°  ·  D10 수직 ${state.v}°  ·  입사각 ${state.incidenceAngle.toFixed(1)}°`,14,25);ctx.font='10px ui-monospace';ctx.fillText('기준 이미지 구조: 투명 아크릴 케이스 · 검은 모터/웜 · 원형 회전판 · 프로파일 기둥 · 태양광 모듈',14,43);
+  // Physical normal used by the dot-product power model.
+  const center=panel([0,0,12]),normal=panel([0,0,96]);line(center,normal,'#58f2e6',3);const n=project(normal);ctx.fillStyle='#7ffff2';ctx.font='bold 12px ui-monospace';ctx.fillText('N',n.x+5,n.y-4);
+  ctx.fillStyle='#b9d6d4';ctx.font='11px ui-monospace';ctx.fillText(`D9 수평 ${state.h}° → 회전 베어링 · D10 수직 ${state.v}° → 웜기어 · 입사각 ${state.incidenceAngle.toFixed(1)}°`,14,25);ctx.font='10px ui-monospace';ctx.fillText('하부 모터 → 회전판 → 상부 박스 / 측면 모터 → 웜 → 웜기어 → 태양광 패널',14,43);
 }
 
 function setup3dControls(){const c=$('rigCanvas');c.addEventListener('pointerdown',event=>{viewer.drag={x:event.clientX,y:event.clientY};c.setPointerCapture?.(event.pointerId);});c.addEventListener('pointermove',event=>{if(!viewer.drag)return;viewer.yaw+=(event.clientX-viewer.drag.x)*.012;viewer.pitch=clamp(viewer.pitch+(event.clientY-viewer.drag.y)*.009,-1.2,.45);viewer.drag={x:event.clientX,y:event.clientY};});['pointerup','pointercancel','pointerleave'].forEach(type=>c.addEventListener(type,()=>{viewer.drag=null;}));c.addEventListener('wheel',event=>{event.preventDefault();viewer.zoom=clamp(viewer.zoom-event.deltaY*.001,.62,1.85);},{passive:false});$('viewReset').addEventListener('click',()=>{Object.assign(viewer,defaultViewerPose);renderAll();});}

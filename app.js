@@ -443,6 +443,12 @@ function drawRig(){
   const box=(center,size,top,side,transform=point=>point)=>{const [x,y,z]=center,[a,b,c]=size.map(v=>v/2),v=[[x-a,y-b,z-c],[x+a,y-b,z-c],[x+a,y+b,z-c],[x-a,y+b,z-c],[x-a,y-b,z+c],[x+a,y-b,z+c],[x+a,y+b,z+c],[x-a,y+b,z+c]].map(transform);[[0,1,2,3],[1,5,6,2],[5,4,7,6],[4,0,3,7],[3,2,6,7]].forEach((face,index)=>poly(face.map(i=>v[i]),index===4?top:side));};
   const disk=(center,r,fill,stroke)=>{const q=[];for(let i=0;i<32;i++){const a=i*Math.PI*2/32;q.push([center[0]+Math.cos(a)*r,center[1],center[2]+Math.sin(a)*r]);}poly(q,fill,stroke);};
   const az=point=>rotateAzimuth(point,state.h),panel=point=>panelWorldPoint(point,state.h,state.v);
+  // Stylised but kinematically placed worm mechanisms. Horizontal: a fixed
+  // worm engages the rotating turntable wheel. Vertical: the second worm and
+  // wheel stay on the azimuth assembly and drive only the panel hinge.
+  const horizontalGear=(center,r)=>{const edge=[];for(let i=0;i<30;i++){const a=i*Math.PI*2/30;edge.push(az([center[0]+Math.cos(a)*r,center[1],center[2]+Math.sin(a)*r]));}poly(edge,'#b8994a','#f1d97d');for(let i=0;i<30;i++){const a=i*Math.PI*2/30;line(az([center[0]+Math.cos(a)*(r-7),center[1]+2,center[2]+Math.sin(a)*(r-7)]),az([center[0]+Math.cos(a)*(r+5),center[1]+2,center[2]+Math.sin(a)*(r+5)]),'#f5d875',1.2);}};
+  const verticalGear=(center,r,transform)=>{const edge=[];for(let i=0;i<26;i++){const a=i*Math.PI*2/26;edge.push(transform([center[0],center[1]+Math.cos(a)*r,center[2]+Math.sin(a)*r]));}poly(edge,'#b8994a','#f1d97d');for(let i=0;i<26;i++){const a=i*Math.PI*2/26;line(transform([center[0],center[1]+Math.cos(a)*(r-6),center[2]+Math.sin(a)*(r-6)]),transform([center[0],center[1]+Math.cos(a)*(r+5),center[2]+Math.sin(a)*(r+5)]),'#f5d875',1.1);}};
+  const worm=(a,b,transform=point=>point,phase=0)=>{line(transform(a),transform(b),'#c79537',8);for(let i=0;i<12;i++){const t=i/11,px=a[0]+(b[0]-a[0])*t,py=a[1]+(b[1]-a[1])*t,pz=a[2]+(b[2]-a[2])*t,offset=((i+phase)%3-1)*3;line(transform([px-4,py-7,pz+offset]),transform([px+4,py+7,pz-offset]),'#ffe19a',1.6);}};
   // Ground and the two-layer 200 × 200 acrylic base from the reference image.
   for(let z=-330;z<=330;z+=55)line([-330,0,z],[330,0,z],'#123942',.55);for(let x=-330;x<=330;x+=55)line([x,0,-330],[x,0,330],'#123942',.55);
   box([0,-22,0],[235,7,235],'#dce8e8','#758c91');
@@ -451,6 +457,9 @@ function drawRig(){
   box([0,-3,0],[202,7,202],'#090c0f','#17262c');
   disk([0,2,0],78,'#e9efef','#9db4b7');disk([0,7,0],72,'#cdd9d9','#6f898e');disk([0,11,0],59,'#253d43','#83aeb0');
   // All items above the turntable use the D9 azimuth transform.
+  horizontalGear([0,13,0],63);
+  box([-93,25,-32],[64,28,38],'#38464a','#172126');
+  worm([-114,25,-12],[-53,25,-12],point=>point,Math.round(state.h/8));
   disk(az([0,15,0]),49,'#f4f5f2','#a6b5b4');
   box([0,15,0],[110,8,110],'#1b2224','#0b1113',az);
   // Back housing and sloped mechanical cover visible in the supplied drawing.
@@ -461,6 +470,9 @@ function drawRig(){
   // Elevation hinge housing and two support arms. They remain attached to D9.
   box([-5,161,-20],[98,22,58],'#dce5e4','#6e8588',az);
   disk(az([0,172,-25]),24,'#313c3f','#b5c7c6');
+  verticalGear([-48,173,-55],27,az);
+  worm([-103,173,-55],[-66,173,-55],az,Math.round(state.v/8));
+  box([-108,173,-55],[16,35,35],'#39464a','#151d20',az);
   line(az([-48,155,-20]),panel([-m.width*.55,0,-8]),'#bccdcb',6);
   line(az([48,155,-20]),panel([m.width*.55,0,-8]),'#bccdcb',6);
   line(az([0,172,-18]),panel([0,0,-10]),'#d9e4e2',8);
@@ -478,7 +490,7 @@ function drawRig(){
   // Power normal and the actual light-direction reference used in P=cos(theta).
   const center=panel([0,0,12]),normal=panel([0,0,112]);line(center,normal,'#58f2e6',3);const n=project(normal);ctx.fillStyle='#7ffff2';ctx.font='bold 12px ui-monospace';ctx.fillText('N',n.x+5,n.y-4);
   const sun=[center[0]+state.lightDirection[0]*330,center[1]+state.lightDirection[1]*330,center[2]+state.lightDirection[2]*330],sp=project(sun),cp=project(center),glow=ctx.createRadialGradient(sp.x,sp.y,3,sp.x,sp.y,45*sp.s);glow.addColorStop(0,'#fff3bd');glow.addColorStop(.25,'#ffd46b88');glow.addColorStop(1,'#ffd46b00');ctx.fillStyle=glow;ctx.beginPath();ctx.arc(sp.x,sp.y,45*sp.s,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff0a0';ctx.beginPath();ctx.arc(sp.x,sp.y,10*sp.s,0,Math.PI*2);ctx.fill();line(sun,center,'#f6d272',1,[5,5]);
-  ctx.fillStyle='#b9d6d4';ctx.font='11px ui-monospace';ctx.fillText(`D9 수평 ${state.h}°  ·  D10 수직 ${state.v}°  ·  입사각 ${state.incidenceAngle.toFixed(1)}°`,14,25);ctx.font='10px ui-monospace';ctx.fillText('제공 설계 이미지 기준: 아크릴 베이스 · 원형 회전판 · 프로파일 기둥 · 태양광 모듈',14,43);
+  ctx.fillStyle='#b9d6d4';ctx.font='11px ui-monospace';ctx.fillText(`D9 수평 ${state.h}°  ·  D10 수직 ${state.v}°  ·  입사각 ${state.incidenceAngle.toFixed(1)}°`,14,25);ctx.font='10px ui-monospace';ctx.fillText('설계 구조: 아크릴 베이스 · 수평/수직 웜·웜휠 · 원형 회전판 · 프로파일 기둥 · 태양광 모듈',14,43);
 }
 
 function setup3dControls(){const c=$('rigCanvas');c.addEventListener('pointerdown',event=>{viewer.drag={x:event.clientX,y:event.clientY};c.setPointerCapture?.(event.pointerId);});c.addEventListener('pointermove',event=>{if(!viewer.drag)return;viewer.yaw+=(event.clientX-viewer.drag.x)*.012;viewer.pitch=clamp(viewer.pitch+(event.clientY-viewer.drag.y)*.009,-1.2,.45);viewer.drag={x:event.clientX,y:event.clientY};});['pointerup','pointercancel','pointerleave'].forEach(type=>c.addEventListener(type,()=>{viewer.drag=null;}));c.addEventListener('wheel',event=>{event.preventDefault();viewer.zoom=clamp(viewer.zoom-event.deltaY*.001,.62,1.85);},{passive:false});$('viewReset').addEventListener('click',()=>{viewer.yaw=.62;viewer.pitch=.28;viewer.zoom=.80;});}

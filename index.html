@@ -7,7 +7,7 @@
   <title>Uno Solar Lab | 2축 태양광 추적기</title>
   <link rel="stylesheet" href="styles.css">
   <!-- Versioned source prevents a visitor's browser from retaining an old 3D renderer. -->
-<script src="app.js?v=angle-fixed2-v1" defer></script>
+<script src="app.js?v=friction-ramp-v1" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -63,8 +63,8 @@
             <div class="fixed-control"><span>회전 베어링</span><b>155 × 155 × 10 mm</b></div>
             <div class="fixed-control"><span>LCD1602 모듈</span><b>82 × 36 × 20.6 mm</b></div>
           </div>
-          <div class="torque-summary"><div><span>수평축 보정</span><b id="d9Torque">133.33 step/°</b></div><div><span>수직축 보정</span><b id="d10Torque">133.33 step/°</b></div><div><span>이론 분해능</span><b id="safeTorque">0.0075° / µstep</b></div></div>
-          <p id="torqueAdvice" class="torque-advice">1.8° NEMA17 · 1/8 microstep · 30:1 웜기어를 기준으로 계산했습니다. 실제 드라이버의 microstep 설정을 바꾸면 코드의 STEPS_PER_DEG 값도 함께 조정하세요.</p>
+          <div class="torque-summary"><div><span>수평축 속도 · 보정</span><b id="d9Torque">1.11 step/° · 20.0°/s</b></div><div><span>수직축 속도 · 보정</span><b id="d10Torque">33.33 step/° · 4.0°/s</b></div><div><span>수평축 부하 여유</span><b id="safeTorque">계산 중</b></div></div>
+          <p id="torqueAdvice" class="torque-advice">수평 직접 구동은 1:1, 수직 웜기어는 30:1입니다. 1.5 kg 회전 하중, 회전 베어링 등가 마찰계수 0.015 및 보수적 유효 토크를 사용해 수평축의 가감속 여유를 근사합니다.</p>
           <div class="collision-heading"><span class="kicker">3D CLEARANCE CHECK</span><b>기구 간섭 · 충돌 검증</b><span id="collisionVerdict" class="collision-verdict">계산 중</span></div>
           <div class="collision-grid"><div><span>베이스 / 155mm 베어링</span><b id="clearBase">—</b></div><div><span>알루미늄 기둥</span><b id="clearPillars">—</b></div><div><span>NEMA17-V / 웜기어</span><b id="clearD10">—</b></div><div><span>NEMA17-H / 웜기어</span><b id="clearD9">—</b></div></div>
           <p id="collisionAdvice" class="collision-advice">패널 외곽과 베이스·기둥·서보 하우징의 최소 간격을 계속 계산합니다.</p>

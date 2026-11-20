@@ -1380,6 +1380,113 @@ void loop() {
   refreshDisplay(false);
 }`;
 
+// Default production sketch: AM-CS2 horizontal motor and L298N vertical motor.
+// V_MAX_DEG is deliberately ±45° about the mechanical centre, not ±15°.
+const half4WireDefaultSketch = `/* 2-axis CDS solar tracker: production HALF4WIRE example */
+#define USE_INA219 0
+#include <Wire.h>
+#include <AccelStepper.h>
+#include <LiquidCrystal_I2C.h>
+
+const bool BRIGHTER_IS_HIGH = true;
+const int H_LEFT_SIGN = -1;
+const int V_TOP_SIGN = +1;
+const float GEAR_RATIO_1 = 1.0f;
+const float GEAR_RATIO_2 = 30.0f;
+const int H_MAX_DEG = 90;       // centre ±90°
+const int V_MAX_DEG = 45;       // centre ±45°: 45~135° in the simulator
+const int H_LIGHT_STOP = 40;
+const int H_LIGHT_START = 65;
+const unsigned long H_CONFIRM_MS = 250UL;
+const unsigned long H_PRESTOP_MS = 100UL;
+const float H_FILTER_ALPHA = 0.35f;
+const int V_LIGHT_STOP = 35;
+const int V_LIGHT_START = 45;
+const int MIN_LIGHT = 60;
+const unsigned long SENSOR_MS = 25UL;
+const unsigned long LCD_MS = 350UL;
+const unsigned long SERIAL_MS = 1000UL;
+const float MAX_SPEED_1 = 66.67f;
+const float MAX_SPEED_2 = 133.33f;
+const float ACCELERATION_1 = 180.0f;
+const float ACCELERATION_2 = 350.0f;
+
+// AM-CS2: D2=A, D3=B, D4=/A, D5=/B. L298N: D6~D9.
+AccelStepper motor1(AccelStepper::HALF4WIRE, 2, 4, 3, 5);
+AccelStepper motor2(AccelStepper::HALF4WIRE, 6, 7, 8, 9);
+LiquidCrystal_I2C lcd1(0x26, 16, 2);
+LiquidCrystal_I2C lcd2(0x27, 16, 2);
+const int CDS_PINS[4] = {A0, A1, A2, A3}; // A0 RT, A1 RB, A2 LT, A3 LB
+const float HALF_STEPS_PER_REV = 400.0f;
+int cds[4] = {0,0,0,0}, errorH = 0, errorV = 0, lightLevel = 0;
+float filteredErrorH = 0; bool hFilterInitialized = false;
+int pendingH = 0, directionH = 0, directionV = 0;
+unsigned long pendingHSince = 0, lastSensor = 0, lastLCD = 0, lastSerial = 0;
+long maxStepsH = 0, maxStepsV = 0;
+char cache1[2][17] = {{0}}, cache2[2][17] = {{0}};
+
+long degreesToSteps(int d, float gear) { return (long)(d * HALF_STEPS_PER_REV * gear / 360.0f); }
+int stepsToDegrees(long s, float gear) { return (int)(s * 360.0f / (HALF_STEPS_PER_REV * gear)); }
+
+void readCDS() {
+  int b[4], sum = 0;
+  for (byte i=0; i<4; i++) { cds[i] = analogRead(CDS_PINS[i]); b[i] = BRIGHTER_IS_HIGH ? cds[i] : 1023-cds[i]; sum += b[i]; }
+  int left=(b[2]+b[3])/2, right=(b[0]+b[1])/2, top=(b[0]+b[2])/2, bottom=(b[1]+b[3])/2;
+  int rawH = left-right;
+  if (!hFilterInitialized) { filteredErrorH=rawH; hFilterInitialized=true; }
+  else filteredErrorH += H_FILTER_ALPHA * (rawH-filteredErrorH);
+  errorH=(int)filteredErrorH; errorV=top-bottom; lightLevel=sum/4;
+}
+int chooseDirection(int error, int sign, int previous, int stopValue, int startValue) {
+  int magnitude=abs(error); if (lightLevel<MIN_LIGHT || magnitude<=stopValue) return 0;
+  int wanted=error>0 ? sign : -sign;
+  return previous!=wanted ? (magnitude>=startValue ? wanted : 0) : previous;
+}
+void applyDirection(AccelStepper &motor, int wanted, int &previous, long limitSteps) {
+  if (wanted==previous) return;
+  if (wanted>0) motor.moveTo(limitSteps); else if (wanted<0) motor.moveTo(-limitSteps); else motor.stop();
+  previous=wanted;
+}
+void updateHorizontal(unsigned long now) {
+  int wanted=chooseDirection(errorH,H_LEFT_SIGN,directionH,H_LIGHT_STOP,H_LIGHT_START);
+  if (!wanted) { pendingH=0; applyDirection(motor1,0,directionH,maxStepsH); return; }
+  if (wanted==directionH) { pendingH=0; return; }
+  if (wanted!=pendingH) { pendingH=wanted; pendingHSince=now; return; }
+  unsigned long elapsed=now-pendingHSince;
+  if (elapsed>=H_PRESTOP_MS && directionH) applyDirection(motor1,0,directionH,maxStepsH);
+  if (elapsed>=H_CONFIRM_MS) { applyDirection(motor1,wanted,directionH,maxStepsH); pendingH=0; }
+}
+void updateTracking(unsigned long now) {
+  updateHorizontal(now);
+  applyDirection(motor2,chooseDirection(errorV,V_TOP_SIGN,directionV,V_LIGHT_STOP,V_LIGHT_START),directionV,maxStepsV);
+}
+void writeRow(LiquidCrystal_I2C &lcd, char oldLine[17], byte row, const char *text) {
+  char next[17]; byte i=0; while(i<16 && text[i]) next[i]=text[i++]; while(i<16) next[i++]=' '; next[16]=0;
+  for(byte col=0; col<16; col++) if(oldLine[col]!=next[col]) { lcd.setCursor(col,row); lcd.write(next[col]); oldLine[col]=next[col]; }
+}
+void updateLCD() {
+  char line[17];
+  snprintf(line,sizeof(line),"1:%04d 2:%04d",cds[0],cds[1]); writeRow(lcd1,cache1[0],0,line);
+  snprintf(line,sizeof(line),"3:%04d 4:%04d",cds[2],cds[3]); writeRow(lcd1,cache1[1],1,line);
+  snprintf(line,sizeof(line),"H:%+04d V:%+04d",stepsToDegrees(motor1.currentPosition(),GEAR_RATIO_1),stepsToDegrees(motor2.currentPosition(),GEAR_RATIO_2)); writeRow(lcd2,cache2[0],0,line);
+  if(lightLevel<MIN_LIGHT) writeRow(lcd2,cache2[1],1,"LOW LIGHT HOLD");
+  else if(directionH==0 && directionV==0) writeRow(lcd2,cache2[1],1,"LIGHT BALANCED");
+  else { snprintf(line,sizeof(line),"E:%+05d,%+05d",errorH,errorV); writeRow(lcd2,cache2[1],1,line); }
+}
+void setup() {
+  Serial.begin(115200); Wire.begin(); lcd1.init(); lcd1.backlight(); lcd2.init(); lcd2.backlight();
+  motor1.setMaxSpeed(MAX_SPEED_1); motor1.setAcceleration(ACCELERATION_1); motor2.setMaxSpeed(MAX_SPEED_2); motor2.setAcceleration(ACCELERATION_2);
+  motor1.setCurrentPosition(0); motor2.setCurrentPosition(0); maxStepsH=degreesToSteps(H_MAX_DEG,GEAR_RATIO_1); maxStepsV=degreesToSteps(V_MAX_DEG,GEAR_RATIO_2);
+  readCDS(); updateTracking(millis()); updateLCD();
+}
+void loop() {
+  motor1.run(); motor2.run(); unsigned long now=millis();
+  if(now-lastSensor>=SENSOR_MS) { lastSensor=now; readCDS(); updateTracking(now); }
+  if(now-lastLCD>=LCD_MS) { lastLCD=now; updateLCD(); }
+  if(now-lastSerial>=SERIAL_MS) { lastSerial=now; Serial.print("ERR H,V:"); Serial.print(errorH); Serial.print(','); Serial.println(errorV); }
+  motor1.run(); motor2.run();
+}`;
+
 const state = { running:false, compiled:null, scope:{}, loopDelay:.18, nextLoop:0, h:90, v:90,
   pins:{A0:0,A1:0,A2:0,A3:0}, ldr:{left:0,right:0,top:0,bottom:0}, power:0, voltage:0, current:0,
   energy:0, co2Kg:0, elapsed:0, lastFrame:null, servos:{}, pinServos:{}, steppers:{}, lcds:{}, auto:null, serial:[],
@@ -1709,7 +1816,7 @@ function drawRig(){
 function setup3dControls(){const c=$('rigCanvas');c.addEventListener('pointerdown',event=>{viewer.drag={x:event.clientX,y:event.clientY};c.setPointerCapture?.(event.pointerId);});c.addEventListener('pointermove',event=>{if(!viewer.drag)return;viewer.yaw+=(event.clientX-viewer.drag.x)*.012;viewer.pitch=clamp(viewer.pitch+(event.clientY-viewer.drag.y)*.009,-1.2,.45);viewer.drag={x:event.clientX,y:event.clientY};});['pointerup','pointercancel','pointerleave'].forEach(type=>c.addEventListener(type,()=>{viewer.drag=null;}));c.addEventListener('wheel',event=>{event.preventDefault();viewer.zoom=clamp(viewer.zoom-event.deltaY*.001,.62,1.85);},{passive:false});$('viewReset').addEventListener('click',()=>{Object.assign(viewer,defaultViewerPose);renderAll();});}
 function renderAll(){syncGraduationSketchTelemetry();const p=state.pins,l=state.ldr;$('a0').textContent=String(p.A0).padStart(4,'0');$('a1').textContent=String(p.A1).padStart(4,'0');$('a2').textContent=String(p.A2).padStart(4,'0');$('a3').textContent=String(p.A3).padStart(4,'0');$('leftAvg').textContent=l.left.toFixed(1);$('rightAvg').textContent=l.right.toFixed(1);$('topAvg').textContent=l.top.toFixed(1);$('bottomAvg').textContent=l.bottom.toFixed(1);$('hError').textContent=(l.right-l.left).toFixed(1);$('vError').textContent=(l.top-l.bottom).toFixed(1);$('hAngle').textContent=`${state.h}°`;$('vAngle').textContent=`${state.v}°`;$('power').textContent=`${state.power.toFixed(2)} W`;$('incidence').textContent=`${state.incidenceAngle.toFixed(1)}°`;$('alignment').textContent=`${(state.alignment*100).toFixed(1)}%`;$('voltage').textContent=`${state.voltage.toFixed(2)} V`;$('current').textContent=`${state.current.toFixed(3)} A`;$('energy').textContent=`${state.energy.toFixed(3)} Wh`;$('co2').textContent=state.co2Kg<.001?`${(state.co2Kg*1000).toFixed(2)} g`:`${state.co2Kg.toFixed(4)} kg`;$('systemState').textContent=state.systemState;$('beforePower').textContent=state.beforePower===null?'—':`${state.beforePower.toFixed(2)} W`;$('afterPower').textContent=state.afterPower===null?'—':`${state.afterPower.toFixed(2)} W`;$('improvement').textContent=state.increaseRate===null?'—':`${state.increaseRate.toFixed(1)}%`;$('lcd26').innerHTML=lcdText('26').map(x=>`<span>${esc(x)}</span>`).join('');$('lcd27').innerHTML=lcdText('27').map(x=>`<span>${esc(x)}</span>`).join('');$('runChip').textContent=state.running?state.systemState:'STOPPED';$('runChip').classList.toggle('running',state.running);$('runBtn').textContent=state.running?'Ⅱ 일시정지':'▶ 실행';updateTorqueSimulation();updateDesignVerification();drawRig();}
 function tick(t){if(state.lastFrame===null)state.lastFrame=t;let d=Math.min(.2,(t-state.lastFrame)/1000);state.lastFrame=t;updateEnvironment();if(state.running){d*=env().speed;state.elapsed+=d;if(!state.advancedController){state.energy+=state.power*d/3600;state.co2Kg=state.energy/1000*env().co2Factor;}if(state.elapsed>=state.nextLoop){runLoop();state.nextLoop=state.elapsed+state.loopDelay;}}renderAll();requestAnimationFrame(tick);}
-function wire(){$('codeEditor').value=defaultSketch;const count=()=>{$('codeLines').textContent=`${$('codeEditor').value.split('\n').length} lines`;};$('codeEditor').addEventListener('input',count);count();[['lightAz','lightAzOut','°'],['lightEl','lightElOut','°']].forEach(([i,o,u])=>{const f=()=>$(o).value=$(i).value+u;$(i).addEventListener('input',f);f();});$('compileBtn').addEventListener('click',compileSketch);$('runBtn').addEventListener('click',()=>{if(!state.compiled&&!compileSketch())return;if(state.auto?.phase==='FINAL'){restartAutoTracking();}else{state.running=!state.running;serialPrint(state.running?'Simulation running':'Simulation paused');}renderAll();});$('stepBtn').addEventListener('click',()=>{if(!state.compiled&&!compileSketch())return;runLoop();renderAll();});$('resetBtn').addEventListener('click',resetBoard);$('exampleBtn').addEventListener('click',()=>{$('codeEditor').value=defaultSketch;count();setMessage('기본 예제를 편집기에 복원했습니다.');});$('verifyBtn').addEventListener('click',runDesignVerification);$('clearLog').addEventListener('click',()=>{state.serial=[];renderSerial();});}
+function wire(){$('codeEditor').value=half4WireDefaultSketch;const count=()=>{$('codeLines').textContent=`${$('codeEditor').value.split('\n').length} lines`;};$('codeEditor').addEventListener('input',count);count();[['lightAz','lightAzOut','°'],['lightEl','lightElOut','°']].forEach(([i,o,u])=>{const f=()=>$(o).value=$(i).value+u;$(i).addEventListener('input',f);f();});$('compileBtn').addEventListener('click',compileSketch);$('runBtn').addEventListener('click',()=>{if(!state.compiled&&!compileSketch())return;if(state.auto?.phase==='FINAL'){restartAutoTracking();}else{state.running=!state.running;serialPrint(state.running?'Simulation running':'Simulation paused');}renderAll();});$('stepBtn').addEventListener('click',()=>{if(!state.compiled&&!compileSketch())return;runLoop();renderAll();});$('resetBtn').addEventListener('click',resetBoard);$('exampleBtn').addEventListener('click',()=>{$('codeEditor').value=half4WireDefaultSketch;count();setMessage('기본 예제를 편집기에 복원했습니다.');});$('verifyBtn').addEventListener('click',runDesignVerification);$('clearLog').addEventListener('click',()=>{state.serial=[];renderSerial();});}
 function wireV2(){wire();['panelWidth','panelHeight'].forEach(id=>{const update=()=>{updateTorqueSimulation();renderAll();};$(id).addEventListener('input',update);$(id).addEventListener('change',update);});}
 wireV2();setup3dControls();updateEnvironment();renderAll();serialPrint('Virtual Uno ready — click Compile · Apply');requestAnimationFrame(tick);
 loadSuppliedCadMeshes();

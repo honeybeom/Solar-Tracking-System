@@ -7,7 +7,7 @@
   <title>Uno Solar Lab | 2축 태양광 추적기</title>
   <link rel="stylesheet" href="styles.css">
   <!-- Versioned source prevents a visitor's browser from retaining an old 3D renderer. -->
-<script src="app.js?v=half4wire-range-v2" defer></script>
+<script src="app.js?v=light-position-sensors-v1" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -19,7 +19,7 @@
     <section class="control-bar panel" aria-label="빛 환경 설정">
       <div><span class="kicker">LIGHT ENVIRONMENT</span><strong>빛 환경</strong></div>
       <label>빛 방향 <output id="lightAzOut"></output><input id="lightAz" type="range" min="20" max="160" value="128"></label>
-      <label>빛 높이 <output id="lightElOut"></output><input id="lightEl" type="range" min="90" max="160" value="118"></label>
+      <label>빛 높이 <output id="lightElOut"></output><input id="lightEl" type="range" min="20" max="90" value="55"></label>
       <div class="fixed-control"><span>빛 세기</span><b>85% · 고정</b></div><input id="intensity" type="hidden" value="85">
       <label>실행 속도 <select id="speed"><option value="1">1×</option><option value="3">3×</option><option value="8">8×</option><option value="15">15×</option></select></label>
     </section>

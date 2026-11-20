@@ -1755,6 +1755,7 @@ function drawRig(){
   const wormAlongX=(left,right,y,z,phase=0,transform=point=>point)=>{line(transform([left,y,z]),transform([right,y,z]),'#141a1c',8);for(let i=0;i<14;i++){const x=left+(right-left)*i/13,a=i*.9+phase;line(transform([x,y+Math.cos(a)*6,z+Math.sin(a)*6]),transform([x,y-Math.cos(a)*6,z-Math.sin(a)*6]),'#c6d2d1',1.5);}};
   const lcdFace=(corners,title,lines)=>{poly(corners,'#d7d9d2','#f7ffff');const inner=corners.map((p,i)=>{const next=corners[(i+1)%4],prev=corners[(i+3)%4];return [p[0]*.91+next[0]*.045+prev[0]*.045,p[1]*.91+next[1]*.045+prev[1]*.045,p[2]*.91+next[2]*.045+prev[2]*.045];});poly(inner,'#263c29','#0b120c');const at=inner.reduce((total,point)=>total.map((value,index)=>value+point[index]/4),[0,0,0]),p=project(at);ctx.fillStyle='#d7f28b';ctx.font='7px ui-monospace';ctx.textAlign='center';ctx.fillText(title,p.x,p.y-7);ctx.fillText((lines[0]||'').trim().slice(0,14),p.x,p.y+1);ctx.fillText((lines[1]||'').trim().slice(0,14),p.x,p.y+9);ctx.textAlign='start';};
   const caption=(text,point,color='#c9e7e4')=>{const p=project(point);ctx.fillStyle=color;ctx.font='bold 10px ui-monospace';ctx.fillText(text,p.x+5,p.y-4);};
+  const sensorBadge=(text,point)=>{const p=project(point),label=text,boxW=ctx.measureText(label).width+8;ctx.fillStyle='rgba(4,20,25,.86)';ctx.fillRect(p.x-boxW/2,p.y-17,boxW,13);ctx.strokeStyle='#dffc85';ctx.lineWidth=1;ctx.strokeRect(p.x-boxW/2,p.y-17,boxW,13);ctx.fillStyle='#ecff9d';ctx.font='bold 9px ui-monospace';ctx.textAlign='center';ctx.fillText(label,p.x,p.y-7);ctx.textAlign='start';};
 
   // 1) Fixed lower acrylic box.  The horizontal motor is inside this box and
   // points upward; only its shaft, bearing and all structure above it rotate.
@@ -1807,7 +1808,14 @@ function drawRig(){
   for(let row=0;row<rows;row++)for(let col=0;col<cols;col++){const x0=-halfW+8+col*cellW,y0=-halfH+8+row*cellH;panelQuad(x0,y0,x0+cellW-2,y0+cellH-2,3,(row+col)%2?'#030507':'#07090b','#c6cfce');}
   // Divider-shielded A0–A3 CdS sensor head on the panel face.
   panelQuad(-36,-36,36,36,8,'#10191a','#77dcd4');line(panel([0,-38,10]),panel([0,38,10]),'#79ece1',2);line(panel([-38,0,10]),panel([38,0,10]),'#79ece1',2);
-  [[-19,-19],[19,-19],[-19,19],[19,19]].forEach(([x,y])=>{const c=panel([x,y,11]),p=project(c);ctx.fillStyle='#dcf47a';ctx.beginPath();ctx.arc(p.x,p.y,5*p.s,0,Math.PI*2);ctx.fill();});
+  // Actual wiring order on the divider-shielded sensor head: viewed from the
+  // panel front, CDS3/A2 and CDS1/A0 are on top; CDS4/A3 and CDS2/A1 below.
+  [[-19,-19,'CDS3 · A2'],[19,-19,'CDS1 · A0'],[-19,19,'CDS4 · A3'],[19,19,'CDS2 · A1']].forEach(([x,y,label])=>{const c=panel([x,y,11]),p=project(c);ctx.fillStyle='#dcf47a';ctx.beginPath();ctx.arc(p.x,p.y,5*p.s,0,Math.PI*2);ctx.fill();sensorBadge(label,panel([x,y,13]));});
+  // The yellow sphere is the configured light location in the same 3D frame as
+  // the panel.  Its dashed ray ends at the LDR head, so azimuth/elevation are
+  // directly inspectable rather than being only control values.
+  const lightOrigin=panel([0,0,14]),lightPoint=[state.lightDirection[0]*430,panelMountHeight+state.lightDirection[1]*430,state.lightDirection[2]*430];
+  line(lightOrigin,lightPoint,'rgba(255,221,95,.8)',1.6,[7,5]);const sun=project(lightPoint),glow=ctx.createRadialGradient(sun.x,sun.y,2,sun.x,sun.y,24);glow.addColorStop(0,'rgba(255,248,177,1)');glow.addColorStop(.32,'rgba(255,202,54,.95)');glow.addColorStop(1,'rgba(255,194,40,0)');ctx.fillStyle=glow;ctx.beginPath();ctx.arc(sun.x,sun.y,24,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff3a4';ctx.beginPath();ctx.arc(sun.x,sun.y,7,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff1a0';ctx.font='bold 10px ui-monospace';ctx.fillText(`SUN Az ${e.az}° · El ${e.el}°`,sun.x+10,sun.y-10);
   // Physical normal used by the dot-product power model.
   const center=panel([0,0,12]),normal=panel([0,0,96]);line(center,normal,'#58f2e6',3);const n=project(normal);ctx.fillStyle='#7ffff2';ctx.font='bold 12px ui-monospace';ctx.fillText('N',n.x+5,n.y-4);
   ctx.fillStyle='#b9d6d4';ctx.font='11px ui-monospace';ctx.fillText(`D9 수평 ${state.h}° → 회전 베어링 · D10 수직 ${state.v}° → 웜기어 · 입사각 ${state.incidenceAngle.toFixed(1)}°`,14,25);ctx.font='10px ui-monospace';ctx.fillText('하부 모터 → 회전판 → 상부 박스 / 측면 모터 → 웜 → 웜기어 → 태양광 패널',14,43);

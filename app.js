@@ -1814,7 +1814,7 @@ function drawRig(){
   // The yellow sphere is the configured light location in the same 3D frame as
   // the panel.  Its dashed ray ends at the LDR head, so azimuth/elevation are
   // directly inspectable rather than being only control values.
-  const lightOrigin=panel([0,0,14]),lightPoint=[state.lightDirection[0]*430,panelMountHeight+state.lightDirection[1]*430,state.lightDirection[2]*430];
+  const lightOrigin=panel([0,0,14]),lightPoint=[state.lightDirection[0]*250,panelMountHeight+state.lightDirection[1]*250,state.lightDirection[2]*250];
   line(lightOrigin,lightPoint,'rgba(255,221,95,.8)',1.6,[7,5]);const sun=project(lightPoint),glow=ctx.createRadialGradient(sun.x,sun.y,2,sun.x,sun.y,24);glow.addColorStop(0,'rgba(255,248,177,1)');glow.addColorStop(.32,'rgba(255,202,54,.95)');glow.addColorStop(1,'rgba(255,194,40,0)');ctx.fillStyle=glow;ctx.beginPath();ctx.arc(sun.x,sun.y,24,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff3a4';ctx.beginPath();ctx.arc(sun.x,sun.y,7,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff1a0';ctx.font='bold 10px ui-monospace';ctx.fillText(`SUN Az ${e.az}° · El ${e.el}°`,sun.x+10,sun.y-10);
   // Physical normal used by the dot-product power model.
   const center=panel([0,0,12]),normal=panel([0,0,96]);line(center,normal,'#58f2e6',3);const n=project(normal);ctx.fillStyle='#7ffff2';ctx.font='bold 12px ui-monospace';ctx.fillText('N',n.x+5,n.y-4);

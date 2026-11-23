@@ -1664,7 +1664,7 @@ function updatePagedLcdProfile(){
   const now=Math.round(state.elapsed*1000),page=Math.floor(Math.max(0,now-profile.startedAt)/Math.max(1,profile.pageMs))%2;
   if(page!==profile.page){profile.page=page;state.scope.lcdPage=page;serialPrint(`LCD page ${page+1}/2 displayed`);}
   const pad=value=>String(Math.round(value)).padStart(4,'0'),signed=value=>`${value>=0?'+':''}${String(Math.round(value)).padStart(3,'0')}`;
-  const errorText=value=>`${value>=0?'+':''}${String(Math.round(value)).padStart(5,'0')}`;
+  const errorText=value=>`${value>=0?'+':'-'}${String(Math.abs(Math.round(value))).padStart(5,'0')}`;
   const h=Math.round(state.h-90),v=Math.round(state.v-90),hMotion=Math.abs(state.steppers.motor1?.velocity||0)>.01?'MOVE':'IDLE',vMotion=Math.abs(state.steppers.motor2?.velocity||0)>.01?'MOVE':'IDLE';
   const light=Math.round((state.pins.A0+state.pins.A1+state.pins.A2+state.pins.A3)/4);
   const errorH=Math.round(state.ldr.left-state.ldr.right),errorV=Math.round(state.ldr.top-state.ldr.bottom);

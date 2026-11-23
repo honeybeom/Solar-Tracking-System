@@ -1383,7 +1383,7 @@ void loop() {
 // Default production sketch: AM-CS2 horizontal motor and L298N vertical motor.
 // V_MAX_DEG is deliberately ±45° about the mechanical centre, not ±15°.
 const half4WireDefaultSketch = `/* 2-axis CDS solar tracker: production HALF4WIRE example */
-#define USE_INA219 0
+#define USE_INA219 1  // simulator virtual INA219; set 0 only when hardware has no INA219
 #include <Wire.h>
 #include <AccelStepper.h>
 #include <LiquidCrystal_I2C.h>

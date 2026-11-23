@@ -1648,7 +1648,10 @@ function compileHalf4WireTrackingSketch(source){try{state.scope=Object.create(nu
 // The restored production sketch has two LCD pages and flips lcdPage every
 // PAGE_MS. The lightweight HALF4WIRE interpreter previously ran the motors
 // but discarded that display state, leaving the first screen permanently on.
-function pagedLcdProfileSource(source){return half4WireTrackingProfileSource(source)&&/\bPAGE_MS\b/.test(source)&&/\blcdPage\b/.test(source)&&/lcdPage\s*\^=\s*1/.test(source);}
+// The physical sketch may toggle with either `lcdPage ^= 1` or the equally
+// valid `lcdPage = (uint8_t)(1 - lcdPage)`.  Detect the two-page LCD design,
+// not one particular C/C++ spelling of that toggle.
+function pagedLcdProfileSource(source){return half4WireTrackingProfileSource(source)&&/\bPAGE_MS\b/.test(source)&&/\blcdPage\b/.test(source);}
 function configurePagedLcdProfile(source){
   if(!pagedLcdProfileSource(source)){state.pagedLcd=null;return;}
   const now=Math.round(state.elapsed*1000);

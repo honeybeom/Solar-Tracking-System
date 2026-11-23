@@ -1405,6 +1405,7 @@ const int V_LIGHT_START = 45;
 const int MIN_LIGHT = 60;
 const unsigned long SENSOR_MS = 25UL;
 const unsigned long LCD_MS = 350UL;
+const unsigned long PAGE_MS = 3000UL;  // LCD1/LCD2 page change interval
 const unsigned long SERIAL_MS = 1000UL;
 const float MAX_SPEED_1 = 22.22f;      // 1:1 수평축: 패널 기준 약 20°/s
 const float MAX_SPEED_2 = 133.33f;
@@ -1421,7 +1422,8 @@ const float HALF_STEPS_PER_REV = 400.0f;
 int cds[4] = {0,0,0,0}, errorH = 0, errorV = 0, lightLevel = 0;
 float filteredErrorH = 0; bool hFilterInitialized = false;
 int pendingH = 0, directionH = 0, directionV = 0;
-unsigned long pendingHSince = 0, lastSensor = 0, lastLCD = 0, lastSerial = 0;
+unsigned long pendingHSince = 0, lastSensor = 0, lastLCD = 0, lastPage = 0, lastSerial = 0;
+uint8_t lcdPage = 0;
 long maxStepsH = 0, maxStepsV = 0;
 char cache1[2][17] = {{0}}, cache2[2][17] = {{0}};
 
@@ -1466,12 +1468,18 @@ void writeRow(LiquidCrystal_I2C &lcd, char oldLine[17], byte row, const char *te
 }
 void updateLCD() {
   char line[17];
-  snprintf(line,sizeof(line),"1:%04d 2:%04d",cds[0],cds[1]); writeRow(lcd1,cache1[0],0,line);
-  snprintf(line,sizeof(line),"3:%04d 4:%04d",cds[2],cds[3]); writeRow(lcd1,cache1[1],1,line);
-  snprintf(line,sizeof(line),"H:%+04d V:%+04d",stepsToDegrees(motor1.currentPosition(),GEAR_RATIO_1),stepsToDegrees(motor2.currentPosition(),GEAR_RATIO_2)); writeRow(lcd2,cache2[0],0,line);
-  if(lightLevel<MIN_LIGHT) writeRow(lcd2,cache2[1],1,"LOW LIGHT HOLD");
-  else if(directionH==0 && directionV==0) writeRow(lcd2,cache2[1],1,"LIGHT BALANCED");
-  else { snprintf(line,sizeof(line),"E:%+05d,%+05d",errorH,errorV); writeRow(lcd2,cache2[1],1,line); }
+  if(lcdPage==0) {
+    // INA219 is disabled in this base simulation: do not invent readings.
+    writeRow(lcd1,cache1[0],0,"V:N/A I:N/A"); writeRow(lcd1,cache1[1],1,"P:N/A E:N/A");
+    writeRow(lcd2,cache2[0],0,"B:N/A A:N/A"); writeRow(lcd2,cache2[1],1,"dP:N/A  RATE:N/A");
+  } else {
+    snprintf(line,sizeof(line),"RT:%04d RB:%04d",cds[0],cds[1]); writeRow(lcd1,cache1[0],0,line);
+    snprintf(line,sizeof(line),"LT:%04d LB:%04d",cds[2],cds[3]); writeRow(lcd1,cache1[1],1,line);
+    snprintf(line,sizeof(line),"H:%+04d V:%+04d",stepsToDegrees(motor1.currentPosition(),GEAR_RATIO_1),stepsToDegrees(motor2.currentPosition(),GEAR_RATIO_2)); writeRow(lcd2,cache2[0],0,line);
+    if(lightLevel<MIN_LIGHT) writeRow(lcd2,cache2[1],1,"LOW LIGHT HOLD");
+    else if(directionH==0 && directionV==0) writeRow(lcd2,cache2[1],1,"LIGHT BALANCED");
+    else { snprintf(line,sizeof(line),"E:%+05d,%+05d",errorH,errorV); writeRow(lcd2,cache2[1],1,line); }
+  }
 }
 void setup() {
   Serial.begin(115200); Wire.begin(); lcd1.init(); lcd1.backlight(); lcd2.init(); lcd2.backlight();
@@ -1482,7 +1490,8 @@ void setup() {
 void loop() {
   motor1.run(); motor2.run(); unsigned long now=millis();
   if(now-lastSensor>=SENSOR_MS) { lastSensor=now; readCDS(); updateTracking(now); }
-  if(now-lastLCD>=LCD_MS) { lastLCD=now; updateLCD(); }
+  if(now-lastPage>=PAGE_MS) { lastPage=now; lcdPage^=1; lastLCD=now; updateLCD(); }
+  else if(now-lastLCD>=LCD_MS) { lastLCD=now; updateLCD(); }
   if(now-lastSerial>=SERIAL_MS) { lastSerial=now; Serial.print("ERR H,V:"); Serial.print(errorH); Serial.print(','); Serial.println(errorV); }
   motor1.run(); motor2.run();
 }`;

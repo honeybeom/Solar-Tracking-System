@@ -1655,7 +1655,7 @@ function pagedLcdProfileSource(source){return half4WireTrackingProfileSource(sou
 function configurePagedLcdProfile(source){
   if(!pagedLcdProfileSource(source)){state.pagedLcd=null;return;}
   const now=Math.round(state.elapsed*1000);
-  state.pagedLcd={page:0,startedAt:now,pageMs:sourceNumber(source,'PAGE_MS',3000),useIna:sourceDefineNumber(source,'USE_INA219',0)===1,lastPage:-1};
+  state.pagedLcd={page:0,startedAt:now,pageMs:sourceNumber(source,'PAGE_MS',3000),useIna:sourceDefineNumber(source,'USE_INA219',0)===1,layout:/\bERROR\s+H\s*:/.test(source)&&/\bLIGHT\s*:/.test(source)?'sensor-status':'power-sensor',lastPage:-1};
   state.scope.lcdPage=0;
 }
 function updatePagedLcdProfile(){
@@ -1664,7 +1664,20 @@ function updatePagedLcdProfile(){
   const now=Math.round(state.elapsed*1000),page=Math.floor(Math.max(0,now-profile.startedAt)/Math.max(1,profile.pageMs))%2;
   if(page!==profile.page){profile.page=page;state.scope.lcdPage=page;serialPrint(`LCD page ${page+1}/2 displayed`);}
   const pad=value=>String(Math.round(value)).padStart(4,'0'),signed=value=>`${value>=0?'+':''}${String(Math.round(value)).padStart(3,'0')}`;
+  const errorText=value=>`${value>=0?'+':''}${String(Math.round(value)).padStart(5,'0')}`;
   const h=Math.round(state.h-90),v=Math.round(state.v-90),hMotion=Math.abs(state.steppers.motor1?.velocity||0)>.01?'MOVE':'IDLE',vMotion=Math.abs(state.steppers.motor2?.velocity||0)>.01?'MOVE':'IDLE';
+  const light=Math.round((state.pins.A0+state.pins.A1+state.pins.A2+state.pins.A3)/4);
+  const errorH=Math.round(state.ldr.left-state.ldr.right),errorV=Math.round(state.ldr.top-state.ldr.bottom);
+  if(profile.layout==='sensor-status'){
+    if(page===0){
+      lcdDiffWrite(lcd1,[`RT:${pad(state.pins.A0)} RB:${pad(state.pins.A1)}`,`LT:${pad(state.pins.A2)} LB:${pad(state.pins.A3)}`]);
+      lcdDiffWrite(lcd2,[`H:${signed(h)} V:${signed(v)}`,light<60?'LOW LIGHT HOLD':`H:${hMotion} V:${vMotion}`]);
+    }else{
+      lcdDiffWrite(lcd1,[`ERROR H:${errorText(errorH)}`,`ERROR V:${errorText(errorV)}`]);
+      lcdDiffWrite(lcd2,[`LIGHT:${pad(light)}`,light<60?'LOW LIGHT HOLD':`H:${hMotion} V:${vMotion}`]);
+    }
+    return;
+  }
   if(page===0){
     if(profile.useIna){lcdDiffWrite(lcd1,[`V:${state.voltage.toFixed(2)} I:${(state.current*1000).toFixed(0)}mA`,`P:${state.power.toFixed(2)}W E:${state.energy.toFixed(2)}`]);lcdDiffWrite(lcd2,[`B:${state.beforePower?.toFixed(2)??'----'} A:${state.afterPower?.toFixed(2)??'----'}`,state.increaseRate===null?'MEASURING...':`RATE:${state.increaseRate.toFixed(1)}%`]);}
     else{lcdDiffWrite(lcd1,['V:N/A I:N/A','P:N/A E:N/A']);lcdDiffWrite(lcd2,['B:N/A A:N/A','dP:N/A  RATE:N/A']);}

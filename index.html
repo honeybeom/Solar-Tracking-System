@@ -7,7 +7,7 @@
   <title>Uno Solar Lab | 2축 태양광 추적기</title>
   <link rel="stylesheet" href="styles.css">
   <!-- Versioned source prevents a visitor's browser from retaining an old 3D renderer. -->
-  <script src="app.js?v=lcd-error-sign-v4" defer></script>
+  <script src="app.js?v=uno-compat-v5" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -29,6 +29,7 @@
         <div class="panel-heading"><div><span class="kicker">SKETCH.ino</span><h2>Arduino Uno 제어 코드</h2></div><span class="mini" id="codeLines">0 lines</span></div>
         <textarea id="codeEditor" spellcheck="false" aria-label="Arduino code editor"></textarea>
         <p class="compile-message" id="compileMessage">기본 코드를 수정한 뒤 코드 적용을 누르세요.</p>
+        <p class="uno-check" id="unoCheck">UNO 호환 검사 대기 · 코드의 보드 핀, I²C 주소, 라이브러리를 확인합니다.</p>
         <div class="hidden-controls" aria-hidden="true"><button id="stepBtn">loop</button><button id="exampleBtn">예제</button></div>
       </section>
 

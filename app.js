@@ -61,7 +61,6 @@ const archivedDefaultSketch = `// 2축 태양광 추적 및 탄소 저감량 모
 #include <AccelStepper.h>
 #include <LiquidCrystal_I2C.h>
 #include <Adafruit_INA219.h>
-#include <Adafruit_INA219.h>
 
 // LCD1 : 추적 전 발전량, LCD2 : 추적 후 발전량 / 결과
 LiquidCrystal_I2C lcd1(0x26, 16, 2);
@@ -1388,6 +1387,7 @@ const half4WireDefaultSketch = `/* 2-axis CDS solar tracker: production HALF4WIR
 #include <Wire.h>
 #include <AccelStepper.h>
 #include <LiquidCrystal_I2C.h>
+#include <Adafruit_INA219.h>
 
 const bool BRIGHTER_IS_HIGH = true;
 const int H_LEFT_SIGN = -1;
@@ -1425,6 +1425,8 @@ int cds[4] = {0,0,0,0}, errorH = 0, errorV = 0, lightLevel = 0;
 float filteredErrorH = 0; bool hFilterInitialized = false;
 int pendingH = 0, directionH = 0, directionV = 0;
 unsigned long pendingHSince = 0, lastSensor = 0, lastLCD = 0, lastPage = 0, lastSerial = 0;
+unsigned long lastPowerMs = 0;
+float energyWh = 0;
 uint8_t lcdPage = 0;
 long maxStepsH = 0, maxStepsV = 0;
 char cache1[2][17] = {{0}}, cache2[2][17] = {{0}};
@@ -1471,9 +1473,20 @@ void writeRow(LiquidCrystal_I2C &lcd, char oldLine[17], byte row, const char *te
 void updateLCD() {
   char line[17];
   if(lcdPage==0) {
-    // INA219 is disabled in this base simulation: do not invent readings.
-    writeRow(lcd1,cache1[0],0,"V:N/A I:N/A"); writeRow(lcd1,cache1[1],1,"P:N/A E:N/A");
-    writeRow(lcd2,cache2[0],0,"B:N/A A:N/A"); writeRow(lcd2,cache2[1],1,"dP:N/A  RATE:N/A");
+    float voltage=ina219.getBusVoltage_V();
+    float current=ina219.getCurrent_mA()/1000.0f; if(current<0) current=0;
+    float power=voltage*current;
+    unsigned long now=millis();
+    if(lastPowerMs) energyWh += power*(float)(now-lastPowerMs)/3600000.0f;
+    lastPowerMs=now;
+    // String(value, decimals) is supported by Arduino Uno.  It avoids AVR
+    // printf's optional float-format linker setting while keeping each row
+    // within the 16-character buffer managed by writeRow().
+    String row1="V:"+String(voltage,2)+" I:"+String((int)(current*1000))+"mA";
+    String row2="P:"+String(power,2)+"W E:"+String(energyWh,2);
+    writeRow(lcd1,cache1[0],0,row1.c_str());
+    writeRow(lcd1,cache1[1],1,row2.c_str());
+    writeRow(lcd2,cache2[0],0,"AF:MEASURING"); writeRow(lcd2,cache2[1],1,"UP:MEASURING");
   } else {
     snprintf(line,sizeof(line),"RT:%04d RB:%04d",cds[0],cds[1]); writeRow(lcd1,cache1[0],0,line);
     snprintf(line,sizeof(line),"LT:%04d LB:%04d",cds[2],cds[3]); writeRow(lcd1,cache1[1],1,line);
